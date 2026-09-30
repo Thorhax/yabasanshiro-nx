@@ -104,15 +104,30 @@ static void writeDefaultFile(const std::string & path)
         "# Switch buttons: A B X Y L R ZL ZR PLUS MINUS LSTICK RSTICK\n"
         "#                 DUP DDOWN DLEFT DRIGHT\n"
         "#                 LS_UP LS_DOWN LS_LEFT LS_RIGHT (left stick)\n"
-        "#                 RS_UP RS_DOWN RS_LEFT RS_RIGHT (right stick)\n", fp);
+        "#                 RS_UP RS_DOWN RS_LEFT RS_RIGHT (right stick)\n"
+        "#\n"
+        "# 'type' picks the controller: pad (Saturn pad), 3dpad (3D pad, analog: the\n"
+        "# left stick and ZL/ZR are analog), twinstick (Virtual On Twin Stick) or\n"
+        "# none (nothing plugged into that port). The\n"
+        "# 3D pad and Twin Stick keep their own bindings in [playerN_3dpad] and\n"
+        "# [playerN_twinstick]; missing ones use their defaults.\n", fp);
 
   for (int p = 0; p < kMaxPlayers; p++) {
-    fprintf(fp, "\n[player%d]\n", p + 1);
+    fprintf(fp, "\n[player%d]\ntype  = pad\n", p + 1);
     for (const SaturnButton & button : kSaturnButtonInfo)
       fprintf(fp, "%-5s = %.*s\n", std::string(button.key).c_str(),
               (int)button.defaults.size(), button.defaults.data());
   }
   fclose(fp);
+}
+
+// Switch stick position (-32767 .. 32767, up positive) as a Saturn axis byte (0 .. 255,
+// up / left at 0)
+static u8 axisByte(s32 value, bool invert)
+{
+  if (invert) value = -value;
+  int byte = (value + 32768) >> 8;
+  return (u8)(byte < 0 ? 0 : byte > 255 ? 255 : byte);
 }
 
 void Input::init(const std::vector<std::string> & game_inis)
@@ -126,10 +141,20 @@ void Input::init(const std::vector<std::string> & game_inis)
   }
 
   for (int p = 0; p < kMaxPlayers; p++) {
+    char type_key[32];
+    snprintf(type_key, sizeof(type_key), "player%d.type", p + 1);
+    std::string type_name = ini.get(type_key, "pad");
+    for (char & c : type_name) c = tolower((unsigned char)c);
+    const ControllerTypeInfo & type = controllerTypeInfo(type_name);
+    types_[p] = type.type;
+    printf("Player %d: %.*s\n", p + 1, (int)type.label.size(), type.label.data());
+
+    const auto & buttons = buttonInfo(type.type);
     for (int i = 0; i < kSaturnButtons; i++) {
-      const SaturnButton & button = kSaturnButtonInfo[i];
-      char key[32];
-      snprintf(key, sizeof(key), "player%d.%.*s", p + 1, (int)button.key.size(), button.key.data());
+      const SaturnButton & button = buttons[i];
+      char key[48];
+      snprintf(key, sizeof(key), "player%d%.*s.%.*s", p + 1, (int)type.section_suffix.size(),
+               type.section_suffix.data(), (int)button.key.size(), button.key.data());
       maps_[p].bind[i] = parseBinds(ini.get(key, std::string(button.defaults)), key);
     }
   }
@@ -142,9 +167,33 @@ void Input::init(const std::vector<std::string> & game_inis)
   PerPortReset();
   PortData_struct * ports[kMaxPlayers] = { &PORTDATA1, &PORTDATA2 };
   for (int p = 0; p < kMaxPlayers; p++) {
-    PerPad_struct * pad = PerPadAdd(ports[p]);
+    saturn_prev_[p] = 0;
+    analog_[p] = nullptr;
+    // An empty port: nothing is added, so the game sees no controller
+    if (types_[p] == ControllerType::None)
+      continue;
+    // The Twin Stick is a digital pad as far as the Saturn is concerned
+    void * controller;
+    if (types_[p] == ControllerType::Pad3D) {
+      PerAnalog_struct * analog = Per3DPadAdd(ports[p]);
+      analog_[p] = analog;
+      controller = analog;
+    } else {
+      analog_[p] = nullptr;
+      controller = PerPadAdd(ports[p]);
+    }
     for (int i = 0; i < kSaturnButtons; i++)
-      PerSetKey(keyCode(p, i), i, pad);
+      PerSetKey(keyCode(p, i), i, controller);
+    // Centred stick, released triggers
+    axes_prev_[p][0] = axes_prev_[p][1] = 0x7F;
+    axes_prev_[p][2] = axes_prev_[p][3] = 0;
+    if (analog_[p]) {
+      PerAnalog_struct * analog = (PerAnalog_struct *)analog_[p];
+      PerAxis1Value(analog, 0x7F);
+      PerAxis2Value(analog, 0x7F);
+      PerAxis3Value(analog, 0);
+      PerAxis4Value(analog, 0);
+    }
   }
 }
 
@@ -161,6 +210,8 @@ void Input::poll()
 void Input::apply(bool forward)
 {
   for (int p = 0; p < kMaxPlayers; p++) {
+    if (types_[p] == ControllerType::None)
+      continue;
     u32 saturn = 0;
     if (forward) {
       for (int i = 0; i < kSaturnButtons; i++)
@@ -175,6 +226,26 @@ void Input::apply(bool forward)
       else PerKeyUp(keyCode(p, i));
     }
     saturn_prev_[p] = saturn;
+
+    // 3D pad: the left stick is its analog stick, and whatever presses Saturn L / R pulls
+    // the analog triggers fully (the Switch's triggers are digital)
+    if (analog_[p]) {
+      PerAnalog_struct * analog = (PerAnalog_struct *)analog_[p];
+      u8 axes[4] = { 0x7F, 0x7F, 0, 0 };
+      if (forward) {
+        const HidAnalogStickState stick = padGetStickPos(&pads_[p], 0);
+        axes[0] = axisByte(stick.x, false);
+        axes[1] = axisByte(stick.y, true);
+        axes[2] = (saturn & (1u << PERPAD_RIGHT_TRIGGER)) ? 0xFF : 0;
+        axes[3] = (saturn & (1u << PERPAD_LEFT_TRIGGER)) ? 0xFF : 0;
+      }
+      if (axes[0] != axes_prev_[p][0]) PerAxis1Value(analog, axes[0]);
+      if (axes[1] != axes_prev_[p][1]) PerAxis2Value(analog, axes[1]);
+      // Right trigger, then left, as the 3D pad reports them
+      if (axes[2] != axes_prev_[p][2]) PerAxis3Value(analog, axes[2]);
+      if (axes[3] != axes_prev_[p][3]) PerAxis4Value(analog, axes[3]);
+      memcpy(axes_prev_[p], axes, sizeof(axes));
+    }
   }
 }
 

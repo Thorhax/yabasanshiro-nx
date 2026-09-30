@@ -855,7 +855,7 @@ bool Localization::SetLanguage(std::string_view preference)
     LoadMoCatalog("romfs:/i18n/" + m_resolved_code + ".mo");
   AddLauncherTranslations();
   LoadJsonOverrides("romfs:/i18n/launcher/" + m_resolved_code + ".json");
-  LoadJsonOverrides("sdmc:/switch/dolphin/i18n/" + m_resolved_code + ".json");
+  LoadJsonOverrides("sdmc:/switch/yabasanshiro/i18n/" + m_resolved_code + ".json");
   return true;
 }
 

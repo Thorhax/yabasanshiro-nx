@@ -782,445 +782,14 @@ struct SettingHelpInfo
 
 static constexpr SettingHelpEntry SETTING_HELP[] = {
     {"Launcher", "Settings group",
-     "Controls the SDL launcher's theme, game-grid layout, animations and navigation sounds. These "
+     "Controls the launcher's theme, game-grid layout, animations and navigation sounds. These "
      "options do not change emulation."},
     {"Language", "Launcher language",
-     "Changes the language used by the SDL launcher. System follows the console language. "
-     "Translation overrides can be placed in switch/dolphin/i18n on the SD card."},
+     "Changes the language used by the launcher. System follows the console language. "
+     "Translation overrides can be placed in switch/yabasanshiro/i18n on the SD card."},
     {"Library & storage", "Settings group",
      "Manages game folders, USB drives, SMB network shares and cover artwork used by "
      "the launcher."},
-    {"RetroAchievements", "Online service",
-     "Signs in to RetroAchievements and controls achievement, hardcore-mode and progress "
-     "notifications for supported game hashes."},
-    {"Frame Generation", "Settings group",
-     "Configures Vulkan LSFG 2x frame generation. It inserts display frames but does not increase "
-     "the emulated game's speed."},
-    {"CPU / Emulation", "Settings group",
-     "Contains Dolphin's CPU engine, threading, speed, MMU, cache and timing controls."},
-    {"Graphics", "Settings group",
-     "Contains the Vulkan renderer, internal resolution, presentation, shader compilation, "
-     "enhancements and graphics hacks."},
-    {"Audio", "Settings group",
-     "Controls DSP emulation, output volume and the buffers used to keep audio stable when frame "
-     "times vary."},
-    {"GameCube & Wii", "Settings group",
-     "Configures console language and video flags, Wii system options, the emulated SD card and "
-     "GameCube expansion slots."},
-    {"Controller / Input", "Settings group",
-     "Configures four GameCube ports and four emulated Wii Remotes, including mappings, "
-     "extensions, motion and rumble."},
-    {"Online & accounts", "Settings group",
-     "Configures Wii networking, GameCube Broadband Adapter networking and NAND certificates used "
-     "by online services."},
-    {"Patches / AR / Gecko / Riivolution", "Settings group",
-     "Manages Dolphin patches, Action Replay and Gecko codes, and launches the game with a "
-     "Riivolution XML patch set."},
-
-    {"CPU engine", "CPU emulation",
-     "Selects how Dolphin executes PowerPC code. JIT ARM64 is the normal high-performance choice; "
-     "the interpreters are much slower and are mainly useful for diagnosis."},
-    {"Dual Core", "CPU threading",
-     "Runs the emulated CPU and GPU work on separate host threads. It usually improves "
-     "performance, but a small number of games require it disabled for correct timing."},
-    {"Enable cheats", "Cheat engine",
-     "Allows enabled Action Replay, Gecko and patch codes to run. Individual codes are selected "
-     "from the game's patches and cheats page."},
-    {"Fast disc speed", "Disc timing",
-     "Removes most emulated optical-drive transfer delays. It can shorten loading, but games that "
-     "depend on accurate disc timing may behave incorrectly."},
-    {"MMU emulation", "CPU accuracy",
-     "Emulates the PowerPC memory-management unit. It is required by a few titles and software "
-     "environments, but has a substantial CPU cost."},
-    {"Emulation speed", "Speed limit",
-     "Sets Dolphin's normal speed target. Lower values slow the whole emulated system; Unlimited "
-     "removes the limiter but cannot make a CPU- or GPU-limited game reach full speed."},
-    {"Advanced CPU & timing", "Settings group",
-     "Opens expert cache, clock and frame-timing controls. Defaults are recommended unless a game "
-     "has a documented need."},
-    {"Accurate CPU write-back cache", "CPU accuracy",
-     "Emulates the PowerPC data cache and locked-cache behavior more accurately. It fixes software "
-     "that relies on cache semantics, at a large performance cost."},
-    {"Correct time drift", "Timing accuracy",
-     "Keeps the emulated time base aligned with elapsed emulation time instead of allowing timing "
-     "errors to accumulate."},
-    {"Precision frame timing", "Frame pacing",
-     "Uses more precise host timing for frame presentation. It can improve pacing, while adding a "
-     "small amount of scheduling overhead."},
-    {"Rush frame presentation", "Frame pacing",
-     "Presents completed frames as early as possible to reduce latency. It can make pacing less "
-     "even when performance is unstable."},
-    {"Smooth early presentation", "Frame pacing",
-     "Smooths early frame presentation to trade a little latency for more consistent pacing."},
-    {"Emulated CPU clock override", "CPU clock override",
-     "Enables a custom emulated GameCube or Wii CPU clock. This changes guest timing and can fix "
-     "or break game logic; it is not a host overclock."},
-    {"CPU clock percentage", "CPU clock override",
-     "Sets the emulated CPU clock relative to the console default. Lower values can reduce "
-     "emulation work but also reduce a game's internal performance."},
-    {"VBI frequency override", "Video timing override",
-     "Enables a custom vertical-blank frequency. It changes the rate at which the emulated console "
-     "advances video timing and can affect gameplay speed."},
-    {"VBI frequency percentage", "Video timing override",
-     "Sets vertical-blank frequency relative to the game's normal rate. Use 100% unless testing a "
-     "title-specific timing adjustment."},
-
-    {"Video backend", "Graphics backend",
-     "Selects the Mesa graphics driver used for the next game. Vulkan (NVK) is the default; "
-     "OpenGL can use the native NVC0 driver or Zink over NVK, globally or per game."},
-    {"GLThread", "OpenGL command threading",
-     "Lets Mesa build OpenGL command streams on a worker thread. It can improve CPU-limited "
-     "games, but may reduce performance or expose compatibility issues in others. This setting "
-     "only affects the OpenGL backend and can be selected per game."},
-    {"Internal resolution", "Resolution / performance",
-     "Sets the resolution used for 3D rendering. Higher values improve clarity but increase GPU "
-     "load and memory use; 1x is the original console resolution."},
-    {"Aspect ratio", "Display geometry",
-     "Chooses how Dolphin determines the final image shape. Auto follows the game, forced modes "
-     "override it, and Stretch fills the display by distorting the image."},
-    {"VSync", "Presentation",
-     "Synchronizes frame presentation to the Switch display to prevent tearing. It can add latency "
-     "or reduce performance headroom when emulation cannot keep up."},
-    {"Shader compilation", "Shader stutter / accuracy",
-     "Controls how Dolphin handles new graphics pipelines. Asynchronous modes reduce compilation "
-     "stutter; synchronous modes avoid missing effects while a shader is being built."},
-    {"Wait for shaders before starting", "Shader compilation",
-     "Builds known shaders before gameplay begins. Startup takes longer, but fewer shaders need to "
-     "compile during the first minutes of play."},
-    {"Crop to aspect ratio", "Display geometry",
-     "Crops pixels outside the selected aspect ratio instead of showing overscan or unused "
-     "borders."},
-    {"Show FPS", "Performance display",
-     "Shows Dolphin's frame-rate overlay during gameplay. The same display can be toggled from the "
-     "in-game overlay."},
-    {"Enhancements", "Settings group",
-     "Opens resolution-independent visual enhancements, filtering, color correction and "
-     "stereoscopic options."},
-    {"Hacks", "Settings group",
-     "Opens graphics workarounds that trade accuracy for performance. Dolphin's defaults are "
-     "recommended for most games."},
-
-    {"LSFG 2x (Vulkan only)", "Frame generation",
-     "Makes LSFG 2x available for the launch. It creates an intermediate display frame between "
-     "rendered frames, adding smoothness without increasing emulation speed."},
-    {"Flow resolution", "Frame generation quality",
-     "Sets the optical-flow working resolution. Half can retain more motion detail, while Quarter "
-     "uses less GPU time and memory and is recommended on Switch."},
-    {"Performance mode", "Frame generation performance",
-     "Uses LSFG's lighter performance-oriented path. Disable it only when testing quality with "
-     "enough GPU headroom."},
-    {"Lossless.dll", "Required component",
-     "Shows whether the LSFG runtime is installed in Dolphin's frame-generation folder. Frame "
-     "generation cannot start while it is missing."},
-
-    {"Anti-aliasing", "Image quality / performance",
-     "Smooths polygon edges. MSAA increases GPU and memory cost; SSAA is substantially more "
-     "expensive because it supersamples the rendered image."},
-    {"Texture filtering", "Texture filtering",
-     "Controls anisotropic and forced texture filtering. Higher anisotropy sharpens angled "
-     "surfaces; forcing filtering can blur 2D artwork or alter effects."},
-    {"Output resampling", "Output scaling",
-     "Selects the filter used when Dolphin scales the final image to the display. Sharper filters "
-     "may emphasize aliasing; softer filters can reduce shimmer."},
-    {"Post-processing effect", "Post-processing",
-     "Applies a shader to the final image after emulation rendering. Effects can change color or "
-     "sharpness and add GPU work."},
-    {"Scaled EFB copy", "Visual enhancement",
-     "Creates EFB copies at the internal resolution instead of native resolution. This improves "
-     "many effects at higher resolutions but can break effects that expect exact native copies."},
-    {"Per-pixel lighting", "Visual enhancement",
-     "Calculates lighting per pixel instead of approximating it per vertex. It can improve some "
-     "scenes but may alter a game's intended lighting and costs GPU time."},
-    {"Widescreen hack", "Display enhancement",
-     "Expands the 3D projection for widescreen without a game patch. It can reveal objects outside "
-     "the intended view and does not fix 2D elements."},
-    {"Disable fog", "Visual modification",
-     "Removes emulated fog. This may make distant scenes clearer, but changes the intended image "
-     "and can break effects that use fog creatively."},
-    {"Force 24-bit color", "Color accuracy",
-     "Uses 24-bit color for EFB output to reduce banding. It can differ from console behavior and "
-     "adds some GPU or memory cost."},
-    {"Disable copy filter", "Visual enhancement",
-     "Disables the console's copy filter, often producing a sharper image. Some games use the "
-     "filter for intentional smoothing or effects."},
-    {"Arbitrary mipmap detection", "Texture enhancement",
-     "Detects custom mip levels generated in unusual ways so higher-resolution rendering can "
-     "preserve them. Detection adds overhead and may misidentify textures."},
-    {"Correct color space", "Color correction",
-     "Converts the console's output color space more accurately for a modern display. It changes "
-     "final colors but not emulated lighting."},
-    {"Game color space", "Color correction",
-     "Selects the color-space interpretation used for the game's output when color correction is "
-     "enabled."},
-    {"Correct SDR gamma", "Gamma correction",
-     "Applies gamma correction appropriate for SDR output instead of passing the game's encoded "
-     "values directly."},
-    {"Game gamma", "Gamma correction",
-     "Sets the gamma curve assumed for the game's output. The default follows Dolphin's normal "
-     "console-color interpretation."},
-    {"Display gamma", "Gamma correction",
-     "Selects the target display gamma used when converting the game's image for the Switch "
-     "screen."},
-    {"Custom display gamma", "Gamma correction",
-     "Sets a manual target gamma when the custom display-gamma option is selected."},
-    {"HDR post-processing", "HDR output",
-     "Enables Dolphin's HDR post-processing path. It is useful only with a compatible HDR output "
-     "chain and adds GPU work."},
-    {"HDR paper white", "HDR output",
-     "Sets the reference brightness used for SDR-white content in the HDR conversion."},
-    {"Stereoscopic 3D mode", "Stereoscopic rendering",
-     "Selects a stereoscopic output mode. Rendering two views increases GPU work and requires a "
-     "compatible viewing method."},
-    {"Stereoscopic depth", "Stereoscopic rendering",
-     "Sets the separation between left- and right-eye views. Excessive depth can be uncomfortable "
-     "or expose rendering outside the intended view."},
-    {"Stereoscopic convergence", "Stereoscopic rendering",
-     "Moves the plane where left- and right-eye images meet, changing which objects appear in "
-     "front of or behind the display."},
-    {"Swap stereo eyes", "Stereoscopic rendering",
-     "Exchanges the left- and right-eye images when the selected display method presents them in "
-     "the opposite order."},
-    {"Full resolution per eye", "Stereoscopic rendering",
-     "Renders each stereoscopic eye at full internal resolution. It improves clarity but "
-     "approximately doubles relevant GPU and memory work."},
-
-    {"Skip EFB access from CPU", "Graphics hack",
-     "Ignores CPU reads and writes to the embedded frame buffer. This is faster, but games using "
-     "EFB access for effects, visibility or gameplay can break."},
-    {"Ignore EFB format changes", "Graphics hack",
-     "Keeps the current EFB pixel format when a game requests a change. It can avoid costly "
-     "conversions but may produce incorrect colors or effects."},
-    {"Store EFB copies to texture only", "Graphics hack",
-     "Keeps EFB copies on the GPU instead of copying them to emulated RAM. This is much faster, "
-     "but games that read those copies with the CPU may break."},
-    {"Defer EFB copies to RAM", "Graphics hack",
-     "Delays EFB copies until the emulated CPU actually needs them. This reduces synchronization "
-     "but can be less accurate for unusual access patterns."},
-    {"Deferred EFB-access invalidation", "Graphics synchronization",
-     "Defers invalidation caused by EFB CPU access so several accesses can share one "
-     "synchronization point. It normally improves performance with high compatibility."},
-    {"GPU texture decoding", "CPU / GPU trade-off",
-     "Decodes supported console texture formats on the GPU. It can reduce CPU work, while adding "
-     "GPU work and requiring backend support."},
-    {"Texture cache accuracy", "Graphics accuracy / performance",
-     "Controls how often Dolphin checks emulated memory for changed textures. Fast is the normal "
-     "default; higher accuracy fixes unusual updates at additional CPU cost."},
-    {"Store XFB copies to texture only", "Graphics hack",
-     "Keeps external frame-buffer copies on the GPU. It is faster, but software that reads or "
-     "modifies XFB data in RAM can display incorrectly."},
-    {"Immediately present XFB", "Presentation hack",
-     "Presents a newly written XFB without waiting for normal video timing. It can reduce latency "
-     "in some games but may cause pacing or duplicate-frame issues."},
-    {"Skip presenting duplicate frames", "Presentation performance",
-     "Avoids presenting identical XFB frames. Emulation still runs normally; this can reduce "
-     "presentation work for 25 or 30 FPS games."},
-    {"Fast depth calculation", "Graphics hack",
-     "Uses a faster approximation for depth values. It is normally safe, but disabling it can fix "
-     "depth precision or layering problems."},
-    {"Disable bounding box", "Graphics hack",
-     "Skips bounding-box emulation. This saves synchronization work, but games that use "
-     "bounding-box results for effects or gameplay may break."},
-    {"Vertex rounding", "Rendering workaround",
-     "Rounds projected vertex positions to reduce gaps and shaking at higher internal resolutions. "
-     "It can change geometry placement in some games."},
-    {"Save texture cache to state", "Save-state behavior",
-     "Includes more texture-cache data in save states. States become larger, but visual "
-     "restoration after loading can be more accurate."},
-    {"VBI skip", "Performance hack",
-     "Skips selected vertical-blank work when emulation falls behind. It can improve apparent "
-     "speed but may cause timing, audio or gameplay problems."},
-    {"Manual texture sampling", "Graphics accuracy",
-     "Emulates console texture sampling explicitly in shaders. It can fix edge and filtering "
-     "behavior, with a significant GPU cost."},
-
-    {"Volume", "Audio output",
-     "Sets Dolphin's final output volume. It does not change a game's own sound settings."},
-    {"DSP emulation", "Audio emulation",
-     "Selects how Dolphin emulates the console DSP. HLE is faster; LLE is more accurate and can be "
-     "required by unusual audio software."},
-    {"Audio latency", "Audio latency / stability",
-     "Sets the target audio latency. Lower values respond faster but are more likely to crackle "
-     "when emulation frame times fluctuate."},
-    {"Audio buffer size", "Audio latency / stability",
-     "Sets the number of samples buffered by Dolphin's audio mixer. Larger buffers tolerate stalls "
-     "better but increase audible delay."},
-    {"Fill audio gaps", "Audio stability",
-     "Synthesizes short missing sections when audio production falls behind, reducing sharp pops "
-     "at the cost of exact output."},
-    {"Preserve pitch", "Audio processing",
-     "Keeps audio pitch near normal when emulation speed changes. The time-stretch processing adds "
-     "a small amount of CPU work and latency."},
-    {"Mute when disabling speed limit", "Audio behavior",
-     "Mutes audio while Dolphin runs without the normal speed limiter, avoiding very fast or "
-     "unstable sound."},
-
-    {"GameCube language", "Console language",
-     "Sets the language exposed to GameCube software. Auto follows the Switch user language when "
-     "supported and otherwise falls back to English."},
-    {"Wii language", "Console language",
-     "Sets the Wii system language in SYSCONF. Auto follows the Switch user language when "
-     "supported and otherwise falls back to English."},
-    {"Wii widescreen", "Console video setting",
-     "Sets the Wii's 16:9 system flag. Games that support widescreen use it to choose their own "
-     "layout; it does not force unsupported games widescreen."},
-    {"Progressive scan", "Console video setting",
-     "Enables the console's progressive-scan system flag for software that supports 480p output."},
-    {"PAL60", "Console video setting",
-     "Enables 60 Hz output for compatible PAL software instead of the normal 50 Hz PAL mode."},
-    {"Wii system settings", "Settings group",
-     "Opens Wii sound, SD card, sensor-bar, Wii Remote speaker and rumble settings."},
-    {"GameCube Slot A / B", "Settings group",
-     "Opens the GameCube IPL and expansion-interface device configuration for slots A and B."},
-    {"Sound mode", "Wii system audio",
-     "Sets the Wii system sound mode reported to games: mono, stereo or surround."},
-    {"Insert SD card", "Wii SD card",
-     "Inserts Dolphin's emulated SD or SDHC card into the Wii. Games and the Wii Menu can access "
-     "it as removable storage."},
-    {"Allow writes to SD card", "Wii SD card",
-     "Allows Wii software to modify the emulated SD card. Disable it to make the card effectively "
-     "read-only."},
-    {"SD card image path", "Wii SD card",
-     "Selects a raw SD-card image. Leaving it on Dolphin default uses the standard file in the "
-     "user directory."},
-    {"Automatically sync SD folder", "Wii SD card",
-     "Synchronizes a normal host folder with the emulated SD image so files can be managed without "
-     "editing the image directly."},
-    {"SD sync folder", "Wii SD card",
-     "Selects the host folder used by automatic SD-card synchronization."},
-    {"SD card file size", "Wii SD card",
-     "Sets the capacity of a newly created emulated SD image. Cards above 2 GiB use SDHC "
-     "behavior."},
-    {"Sensor bar position", "Wii input",
-     "Reports whether the emulated sensor bar is above or below the display, matching the Wii "
-     "system setting used by pointer calculations."},
-    {"IR sensitivity", "Wii input",
-     "Sets the Wii sensor-bar sensitivity level reported to software. This is separate from "
-     "Dolphin's gyro-pointer sensitivity."},
-    {"Enable Wii Remote speaker", "Wii Remote audio",
-     "Allows games to send sound to the emulated Wii Remote speaker and routes it through Switch "
-     "audio output."},
-    {"Wii Remote speaker volume", "Wii Remote audio",
-     "Sets the emulated Wii Remote speaker volume stored in Wii system configuration."},
-    {"Enable Wii Remote rumble", "Wii input",
-     "Allows Wii software to request vibration from emulated Wii Remotes."},
-
-    {"Skip GameCube Main Menu", "GameCube IPL",
-     "Boots games directly instead of entering the GameCube IPL menu. If a matching IPL ROM is "
-     "unavailable, Dolphin falls back to direct boot."},
-    {"Slot A", "GameCube expansion slot",
-     "Opens the device attached to GameCube expansion slot A, normally a memory card or GCI "
-     "folder."},
-    {"Slot B", "GameCube expansion slot",
-     "Opens the device attached to GameCube expansion slot B."},
-    {"Device", "GameCube expansion device",
-     "Selects the emulated EXI device in this slot, such as a memory card, GCI folder, USB Gecko, "
-     "Advance Game Port or microphone."},
-    {"Memory card path", "GameCube save storage",
-     "Selects the raw GameCube memory-card file used by this slot. Dolphin's default is "
-     "region-aware."},
-    {"GCI folder path", "GameCube save storage",
-     "Selects a folder where each GameCube save is stored as an individual GCI file."},
-    {"GBA cartridge path", "GameCube peripheral",
-     "Selects the GBA cartridge image exposed through the emulated Advance Game Port device."},
-
-    {"Emulated device", "GameCube controller",
-     "Selects the GameCube peripheral presented to the game on this port: standard controller, "
-     "steering wheel, dance mat or DK Bongos."},
-    {"Switch player", "Physical controller",
-     "Chooses which connected Switch controller supplies input to this emulated controller port."},
-    {"Joy-Con layout", "Physical controller",
-     "Selects Dual Joy-Con, single left, single right or automatic handling for the assigned "
-     "Switch player."},
-    {"Interactive mapping", "Controller mapping",
-     "Opens Dolphin's press-to-bind screen for GameCube buttons, sticks and triggers."},
-    {"Wii Remote mapping", "Controller mapping",
-     "Opens the press-to-bind screen for the emulated Wii Remote buttons and pointer controls."},
-    {"Extension mapping", "Controller mapping",
-     "Opens mappings for the selected Wii Remote extension, such as Nunchuk or Classic "
-     "Controller."},
-    {"Motion & pointer", "Motion input",
-     "Opens orientation, MotionPlus, gyroscope pointer, sensitivity and calibration controls."},
-    {"Orientation hotkeys", "Wii Remote orientation",
-     "Opens hold and toggle bindings that temporarily reverse the Sideways or Upright Wii Remote "
-     "orientation."},
-    {"Extension", "Wii Remote extension",
-     "Selects the extension attached to the emulated Wii Remote. Choose None unless the game "
-     "expects a specific accessory."},
-    {"Rumble strength", "Controller feedback",
-     "Sets how strongly emulated rumble is sent to the assigned Switch controller. Zero disables "
-     "vibration for this port."},
-    {"Control Stick dead zone", "Analog input",
-     "Ignores small movement around the GameCube Control Stick center. Raise it only enough to "
-     "hide physical stick drift."},
-    {"C-Stick dead zone", "Analog input",
-     "Ignores small movement around the GameCube C-Stick center."},
-    {"Trigger dead zone", "Analog input",
-     "Sets how far an analog trigger must move before Dolphin begins reporting pressure."},
-    {"Extension stick dead zone", "Analog input",
-     "Sets the center dead zone for the selected Nunchuk or Classic Controller stick."},
-    {"Profiles", "Controller profiles",
-     "Loads or saves reusable Dolphin controller mappings for this emulated port."},
-    {"Active profile", "Controller profiles",
-     "Shows whether this port uses its current mapping, a saved profile or the global mapping."},
-    {"Load profile", "Controller profiles",
-     "Loads a previously saved Dolphin controller profile into this port or assigns it to this "
-     "game."},
-    {"Save as profile", "Controller profiles",
-     "Saves the current port mapping as a reusable Dolphin controller profile."},
-    {"Use global mapping", "Per-game controller override",
-     "Removes this game's controller-profile override so the port follows the global mapping "
-     "again."},
-    {"Reset Switch defaults", "Controller mapping",
-     "Restores Dolphin NX's default Switch bindings for this controller port only."},
-    {"Reset game mapping", "Per-game controller override",
-     "Removes this game's mapping override and returns the port to its global controller profile."},
-    {"Sideways Wii Remote", "Wii Remote orientation",
-     "Rotates the emulated Wii Remote for games designed to hold it sideways."},
-    {"Upright Wii Remote", "Wii Remote orientation",
-     "Forces the emulated Wii Remote to be treated as upright."},
-    {"Attach MotionPlus", "Motion input",
-     "Attaches the emulated Wii MotionPlus gyroscope used by games that require or support it."},
-    {"Gyro pointer", "Motion input",
-     "Uses Switch gyroscope motion to control the emulated Wii infrared pointer."},
-    {"Touchscreen Wii pointer", "Pointer input",
-     "Uses the Switch touchscreen as an absolute Wii Remote pointer in handheld mode. Touches "
-     "outside the rendered game area are ignored."},
-    {"Pointer sensitivity", "Motion input",
-     "Sets how far the on-screen pointer moves for a given controller rotation."},
-    {"Gyro dead zone", "Motion input",
-     "Ignores very small gyroscope rates to reduce cursor drift while the controller is still."},
-    {"Auto-calibration", "Motion calibration",
-     "Sets how long the controller must remain still before Dolphin updates its gyroscope bias "
-     "estimate."},
-    {"Accelerometer influence", "Motion input",
-     "Controls how strongly accelerometer orientation corrects the gyro-based pointer. Higher "
-     "values resist long-term drift but can react to movement."},
-    {"Right-stick pointer dead zone", "Pointer input",
-     "Sets the center dead zone when the right stick contributes to Wii pointer movement."},
-    {"IR relative input", "Pointer input",
-     "Makes the right stick move the Wii pointer from its current position instead of directly "
-     "selecting an absolute position."},
-    {"IR total yaw", "Pointer range",
-     "Sets the emulated horizontal Wii Remote rotation covered by the full right-stick pointer "
-     "range."},
-    {"IR total pitch", "Pointer range",
-     "Sets the emulated vertical Wii Remote rotation covered by the full right-stick pointer "
-     "range."},
-    {"Pointer recenter", "Controller mapping",
-     "Assigns the input used to recenter the gyro pointer's yaw and pitch during play."},
-    {"Calibration guide", "Motion calibration",
-     "Shows the recommended procedure for learning gyroscope bias and keeping pointer input "
-     "stable."},
-
-    {"Download Gecko codes", "Game modification",
-     "Downloads available Gecko codes for this game from the configured online database and merges "
-     "new entries into Dolphin's game configuration."},
-    {"Launch with Riivolution XML", "Game modification",
-     "Chooses a Riivolution XML patch definition and launches the game with its replacement files "
-     "and options."},
-    {"Cheat engine", "Cheat engine",
-     "Enables or disables Dolphin's patch, Action Replay and Gecko execution for this game."},
-
     {"Theme", "Launcher appearance",
      "Changes the launcher's background and visual style. It has no effect on the in-game "
      "renderer or performance."},
@@ -1239,7 +808,7 @@ static constexpr SettingHelpEntry SETTING_HELP[] = {
     {"UI animations", "Launcher appearance",
      "Enables launcher transitions, animated highlights and moving theme elements."},
     {"Sound effects", "Launcher audio",
-     "Enables SDL launcher navigation, confirmation and back sound effects."},
+     "Enables launcher navigation, confirmation and back sound effects."},
     {"SteamGridDB API key", "Artwork service",
      "Edits the API key used to search and download SteamGridDB covers and shortcut icons. Leave "
      "it blank to remove the saved key."},
@@ -1252,6 +821,15 @@ static constexpr SettingHelpEntry SETTING_HELP[] = {
     {"Remove custom cover", "Artwork management",
      "Deletes this game's custom cover. The launcher falls back to embedded game artwork when "
      "available."},
+    {"Game folders", "Library",
+     "The folders the launcher looks for games in, on the SD card, USB drives or SMB shares."},
+    {"File manager", "Library",
+     "Browses, copies, moves and deletes files on the SD card, USB drives and SMB shares."},
+    {"SMB network shares", "Network storage",
+     "Adds, edits and connects the network shares games can be played from."},
+    {"Download covers", "Artwork service",
+     "Downloads a SteamGridDB cover for every game that doesn't have one yet. Needs a "
+     "SteamGridDB API key."},
 };
 
 std::optional<SettingHelpInfo> SaturnSettingHelp(std::string_view label);
@@ -1266,17 +844,6 @@ SettingHelpInfo SettingHelpFor(std::string_view title, const Row& row)
       return {entry.kind, std::string(entry.description)};
   }
 
-  if (row.label.starts_with("GameCube controller "))
-    return {"Controller port",
-            "Opens this GameCube controller port and shows its emulated device, assigned Switch "
-            "player, mappings, dead zones, rumble and profiles."};
-  if (row.label.starts_with("Wii Remote "))
-    return {"Controller port", "Opens this emulated Wii Remote and shows its assigned Switch "
-                               "player, extension, mappings, motion, rumble and profiles."};
-  if (row.label.starts_with("Patch ") || row.label.starts_with("AR ") ||
-      row.label.starts_with("Gecko "))
-    return {"Game modification", "Enables or disables this game-specific code. Its effect is "
-                                 "defined by the patch, Action Replay or Gecko entry."};
   if (row.value == ">")
     return {"Settings group", "Opens this group of settings."};
   if (!row.adjustable)
@@ -1290,11 +857,8 @@ SettingHelpInfo SettingHelpFor(std::string_view title, const Row& row)
 
 std::string_view SettingScope(std::string_view title, std::string_view context)
 {
-  if (title.starts_with("Game ") || title == "Patches, cheats & Riivolution" ||
-      title == "Cover settings")
-    return "Per-game setting";
-  if (!context.empty() &&
-      (title.starts_with("GameCube controller ") || title.starts_with("Wii Remote ")))
+  (void)context;
+  if (title.starts_with("Game ") || title == "Cover settings")
     return "Per-game setting";
   return "Global setting";
 }
@@ -1514,7 +1078,6 @@ private:
   bool ConfirmApplicationExit();
   void PrepareApplicationExit();
   void LoadDefaults();
-  void MarkConfigDirty();
   void MarkStoreDirty();
   void FlushPendingSaves();
   bool LoadFonts();
@@ -1685,6 +1248,7 @@ private:
   void SaturnOptionsPage(std::string_view title, std::span<const SaturnOption> options,
                          Game* game);
   void SaturnControlsRoot(Game* game);
+  std::string SaturnControllerType(int player, Game* game);
   void SaturnMappingPage(int player, Game* game);
   void SaturnGameSettingsRoot(Game* game);
   void RenderSaturnCapture(std::string_view label, int position, int count, bool releasing,
@@ -1743,12 +1307,6 @@ private:
   void InvalidateGameSettingCache(const Game& game) const;
   std::string GlobalValueLabel(std::string_view value) const;
   std::string UseGlobalValueLabel(std::string_view value) const;
-  std::string PerGameBoolLabel(const Game& game, std::string_view section, std::string_view key,
-                               bool global, bool inverted = false) const;
-  void EditPerGameBool(Game& game, std::string_view title, std::string_view section,
-                       std::string_view key, bool global, int delta,
-                       std::string_view on_label = "On", std::string_view off_label = "Off",
-                       bool inverted = false);
 
   Store m_store;
   Common::IniFile m_saturn_settings;
@@ -1901,11 +1459,6 @@ void Launcher::LoadDefaults()
   m_sources = {std::string(DATA_DIRECTORY) + "/games"};
   SaveSources();
   MarkStoreDirty();
-}
-
-void Launcher::MarkConfigDirty()
-{
-  m_config_dirty = true;
 }
 
 void Launcher::MarkStoreDirty()
@@ -7041,61 +6594,6 @@ std::string Launcher::UseGlobalValueLabel(std::string_view value) const
          std::string(m_localization.Translate(value)) + ")";
 }
 
-std::string Launcher::PerGameBoolLabel(const Game& game, std::string_view section,
-                                       std::string_view key, bool global, bool inverted) const
-{
-  const std::optional<std::string> local = GetGameSetting(game, section, key);
-  if (!local)
-  {
-    const bool value = inverted ? !global : global;
-    return GlobalValueLabel(value ? "On" : "Off");
-  }
-  const std::string normalized = Lower(*local);
-  bool value = normalized == "true" || normalized == "1" || normalized == "yes";
-  if (inverted)
-    value = !value;
-  return value ? "On" : "Off";
-}
-
-void Launcher::EditPerGameBool(Game& game, std::string_view title, std::string_view section,
-                               std::string_view key, bool global, int delta,
-                               std::string_view on_label, std::string_view off_label, bool inverted)
-{
-  const std::optional<std::string> local = GetGameSetting(game, section, key);
-  int selected = 0;
-  if (local)
-  {
-    const std::string normalized = Lower(*local);
-    bool value = normalized == "true" || normalized == "1" || normalized == "yes";
-    if (inverted)
-      value = !value;
-    selected = value ? 1 : 2;
-  }
-
-  if (delta == 0)
-  {
-    const bool global_value = inverted ? !global : global;
-    selected = Dropdown(std::string(title),
-                        {UseGlobalValueLabel(global_value ? on_label : off_label),
-                         std::string(on_label), std::string(off_label)},
-                        selected);
-  }
-  else
-  {
-    selected = (selected + (delta < 0 ? -1 : 1) + 3) % 3;
-  }
-
-  if (selected == 0)
-    SetGameSetting(game, section, key, std::nullopt);
-  else
-  {
-    bool value = selected == 1;
-    if (inverted)
-      value = !value;
-    SetGameSetting(game, section, key, value ? "True" : "False");
-  }
-}
-
 void Launcher::AppearanceSettings()
 {
   static constexpr std::array<std::string_view, 5> THEMES = {"XMB (PS3)", "Bubbles", "Glow",
@@ -8262,9 +7760,9 @@ std::string Launcher::FileBrowser(const std::string& start, bool select_folder, 
         return lower.ends_with(Lower(std::string(extension)));
       });
     }
-    static constexpr std::array<std::string_view, 13> EXTENSIONS = {
-        ".gcm", ".tgc", ".bin", ".iso", ".ciso", ".gcz", ".wbfs",
-        ".wia", ".rvz", ".nfs", ".wad", ".dol",  ".elf"};
+    // Saturn disc images, as the library scan finds them
+    static constexpr std::array<std::string_view, 5> EXTENSIONS = {".cue", ".chd", ".iso",
+                                                                   ".ccd", ".mds"};
     return std::ranges::any_of(
         EXTENSIONS, [&](std::string_view extension) { return lower.ends_with(extension); });
   };

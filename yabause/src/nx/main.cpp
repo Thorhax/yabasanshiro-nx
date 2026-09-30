@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 
 #include <switch.h>
 #include <SDL2/SDL.h>
+#include <zlib.h>
 
 extern "C" {
 #include "../config.h"
@@ -71,6 +72,7 @@ extern "C" {
 static EGLDisplay s_display;
 static EGLContext s_context;
 static EGLSurface s_surface;
+static EGLConfig s_config;
 static int s_surface_width = 1280;
 static int s_surface_height = 720;
 
@@ -273,6 +275,7 @@ static bool initEgl(NWindow* win)
       goto fail_display;
     }
 
+    s_config = config;
     s_surface = eglCreateWindowSurface(s_display, config, win, NULL);
     if (!s_surface) {
       printf("eglCreateWindowSurface failed: 0x%x\n", eglGetError());
@@ -550,17 +553,173 @@ static void resizeVideo(int width, int height)
   VdpResume();
 }
 
-// Without a real BIOS the core falls back to its high-level emulated one
-static bool findBios()
+// The display size for the current mode: 1080p docked, 720p handheld
+static void displaySize(bool docked, u32 * width, u32 * height)
 {
-  for (const char * name : { "bios.bin", "saturn_bios.bin", "sega_101.bin", "mpr-17933.bin" }) {
-    std::string path = nx::dataPath(name);
-    if (fileExists(path)) {
-      snprintf(biospath, sizeof(biospath), "%s", path.c_str());
-      return true;
+  *width = docked ? 1920 : 1280;
+  *height = docked ? 1080 : 720;
+}
+
+// Docking or undocking mid-game: the window's buffers can't change size while EGL holds
+// them, so the surface is rebuilt at the new size (the GL context, and with it everything
+// the renderer has uploaded, stays). False when there's nothing left to draw to.
+static bool switchDisplayMode(bool docked)
+{
+  u32 width, height;
+  displaySize(docked, &width, &height);
+  printf("Display mode: %s, %ux%u\n", docked ? "docked" : "handheld", width, height);
+
+  VdpRevoke();
+  YuiUseOGLOnThisThread();
+  glFinish();
+  eglMakeCurrent(s_display, EGL_NO_SURFACE, EGL_NO_SURFACE, s_context);
+  eglDestroySurface(s_display, s_surface);
+  s_surface = NULL;
+
+  NWindow * window = nwindowGetDefault();
+  nwindowReleaseBuffers(window);
+  if (R_FAILED(nwindowSetDimensions(window, width, height)) ||
+      R_FAILED(nwindowSetCrop(window, 0, 0, width, height)))
+    printf("Could not resize the display window\n");
+  s_surface = eglCreateWindowSurface(s_display, s_config, window, NULL);
+  if (!s_surface) {
+    // Hand the render thread back its (surfaceless) context; the caller ends the game
+    printf("eglCreateWindowSurface failed: 0x%x\n", eglGetError());
+    YuiRevokeOGLOnThisThread();
+    VdpResume();
+    return false;
+  }
+  eglMakeCurrent(s_display, s_surface, s_surface, s_context);
+  eglSwapInterval(s_display, s_settings.vsync ? 1 : 0);
+
+  EGLint surface_width = 0, surface_height = 0;
+  if (!eglQuerySurface(s_display, s_surface, EGL_WIDTH, &surface_width) ||
+      !eglQuerySurface(s_display, s_surface, EGL_HEIGHT, &surface_height) ||
+      surface_width <= 0 || surface_height <= 0) {
+    surface_width = width;
+    surface_height = height;
+  }
+  printf("Display: %dx%d\n", surface_width, surface_height);
+  s_surface_width = surface_width;
+  s_surface_height = surface_height;
+  VIDCore->Resize(0, 0, surface_width, surface_height, 1, s_settings.aspect_mode);
+
+  YuiRevokeOGLOnThisThread();
+  VdpResume();
+  return true;
+}
+
+enum class BiosRegion { Unknown, Japan, Overseas };
+
+struct BiosFile {
+  std::string path;
+  BiosRegion region;
+};
+
+// Known dumps by CRC32, else a hint in the file name
+static BiosRegion biosRegion(const std::string & path)
+{
+  FILE * fp = fopen(path.c_str(), "rb");
+  if (fp) {
+    std::vector<unsigned char> data(512 * 1024);
+    const size_t size = fread(data.data(), 1, data.size(), fp);
+    fclose(fp);
+    const uLong crc = crc32(crc32(0L, Z_NULL, 0), data.data(), (uInt)size);
+    // The dumps MAME knows (src/mame/sega/sat_console.cpp)
+    switch (crc) {
+    case 0x224b752c: // Japan v1.01, sega_101.bin
+    case 0xb3c63c25: // Japan v1.003, sega1003.bin
+    case 0x2aba43c2: // Japan v1.00, sega_100.bin
+    case 0xe4d61811: // JVC V-Saturn, vsaturn.bin
+    case 0x3408dbf4: // Hitachi HiSaturn v1.02, mpr-18100.bin
+    case 0x721e1b60: // Hitachi HiSaturn v1.01, hisaturn.bin
+      return BiosRegion::Japan;
+    case 0x4afcf0fa: // Overseas (US / Europe) v1.01a, mpr-17933.bin
+    case 0xf90f0089: // Overseas (US / Europe) v1.00a, sega_100a.bin
+      return BiosRegion::Overseas;
     }
   }
-  return false;
+
+  std::string name = path.substr(path.find_last_of('/') + 1);
+  for (char & c : name) c = tolower((unsigned char)c);
+  const auto has = [&](const char * word) { return name.find(word) != std::string::npos; };
+  if (has("us") || has("eu") || has("mpr-17933") || has("sega_100a") || has("pal") ||
+      has("ntsc-u"))
+    return BiosRegion::Overseas;
+  if (has("jp") || has("jap") || has("sega_10") || has("sega1003") || has("hisaturn") ||
+      has("vsaturn") || has("mpr-18100"))
+    return BiosRegion::Japan;
+  return BiosRegion::Unknown;
+}
+
+// Saturn BIOS images (512 KB) in bios/ and, as earlier versions used, next to the app
+static std::vector<BiosFile> findBiosFiles()
+{
+  std::vector<BiosFile> files;
+  // The names earlier versions looked for come first
+  for (const char * name : { "bios.bin", "saturn_bios.bin", "sega_101.bin", "mpr-17933.bin" }) {
+    const std::string path = nx::dataPath(name);
+    if (fileExists(path)) files.push_back({ path, biosRegion(path) });
+  }
+  for (const std::string & directory : { nx::dataPath("bios"), std::string(NX_DATA_DIR) }) {
+    DIR * dir = opendir(directory.c_str());
+    if (!dir) continue;
+    std::vector<std::string> names;
+    while (dirent * entry = readdir(dir))
+      names.push_back(entry->d_name);
+    closedir(dir);
+    std::sort(names.begin(), names.end());
+    for (const std::string & name : names) {
+      const std::string path = directory + "/" + name;
+      struct stat st;
+      if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size != 512 * 1024)
+        continue;
+      if (std::any_of(files.begin(), files.end(), [&](const BiosFile & f) { return f.path == path; }))
+        continue;
+      files.push_back({ path, biosRegion(path) });
+    }
+  }
+  return files;
+}
+
+// Picks the BIOS for 'choice' (auto / jp / us / hle): auto uses a Japanese BIOS for Japanese
+// discs and a US / European one for the rest. Without a BIOS file the core falls back to its
+// high-level emulated one.
+static bool findBios(const std::string & choice, DiscIO::Region disc_region)
+{
+  if (choice == "hle")
+    return false;
+  const std::vector<BiosFile> files = findBiosFiles();
+  for (const BiosFile & file : files)
+    printf("BIOS file: %s (%s)\n", file.path.c_str(),
+           file.region == BiosRegion::Japan ? "Japan" :
+           file.region == BiosRegion::Overseas ? "US / Europe" : "region unknown");
+  if (files.empty())
+    return false;
+
+  BiosRegion wanted;
+  if (choice == "jp")
+    wanted = BiosRegion::Japan;
+  else if (choice == "us")
+    wanted = BiosRegion::Overseas;
+  else
+    wanted = disc_region == DiscIO::Region::NTSC_J || disc_region == DiscIO::Region::NTSC_K ?
+             BiosRegion::Japan : BiosRegion::Overseas;
+
+  // The wanted region, else one of unknown region, else whatever there is
+  const BiosFile * pick = nullptr;
+  for (BiosRegion region : { wanted, BiosRegion::Unknown }) {
+    for (const BiosFile & file : files) {
+      if (file.region == region) { pick = &file; break; }
+    }
+    if (pick) break;
+  }
+  if (!pick) {
+    printf("No %s BIOS found, using another\n", wanted == BiosRegion::Japan ? "Japanese" : "US / European");
+    pick = &files.front();
+  }
+  snprintf(biospath, sizeof(biospath), "%s", pick->path.c_str());
+  return true;
 }
 
 enum class SessionEnd {
@@ -696,15 +855,16 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     s_settings.dynarec = false;
   }
 
-  s_use_bios = findBios();
-  printf("BIOS: %s\n", s_use_bios ? biospath : "(emulated)");
+  const UICommon::GameFile disc(game);
+  s_use_bios = findBios(s_settings.bios, disc.IsValid() ? disc.GetRegion() : DiscIO::Region::Unknown);
+  printf("BIOS (%s): %s\n", s_settings.bios.c_str(), s_use_bios ? biospath : "(emulated)");
 
   // The launcher's SDL window released the default window's buffers on shutdown, which
   // also clears its dimensions; without this the EGL surface would be 0x0.
   NWindow * window = nwindowGetDefault();
-  const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
-  const u32 window_width = docked ? 1920 : 1280;
-  const u32 window_height = docked ? 1080 : 720;
+  bool docked = appletGetOperationMode() == AppletOperationMode_Console;
+  u32 window_width, window_height;
+  displaySize(docked, &window_width, &window_height);
   if (!nwindowIsValid(window) || R_FAILED(nwindowSetDimensions(window, window_width, window_height)) ||
       R_FAILED(nwindowSetCrop(window, 0, 0, window_width, window_height))) {
     printf("Could not configure the display window\n");
@@ -774,10 +934,18 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   while (appletMainLoop()) {
     s_input.poll();
 
+    // Docked or undocked: draw at the new display's resolution
+    const bool now_docked = appletGetOperationMode() == AppletOperationMode_Console;
+    if (now_docked != docked) {
+      docked = now_docked;
+      if (!switchDisplayMode(docked))
+        break;
+    }
+
     // MINUS + PLUS opens the quick menu, which pauses the game
     DolphinSwitch::RuntimeOverlay::UpdateInput(s_input.down(0), s_input.held(0));
     if (DolphinSwitch::RuntimeOverlay::IsVisible()) {
-      const MenuEnd menu_end = runQuickMenu(width, height);
+      const MenuEnd menu_end = runQuickMenu(s_surface_width, s_surface_height);
       if (menu_end == MenuEnd::BackToLauncher) {
         end = SessionEnd::BackToLauncher;
         break;
@@ -874,7 +1042,7 @@ int main(int argc, char** argv)
   nx::ensureDataDirs();
   initLog();
   nx::migrateOldDataDir();
-  printf("YabaSanshiro NX %s (%s)\n", YAB_VERSION, GIT_SHA1);
+  printf("YabaSanshiro NX %s (core %s, %s)\n", YAB_NX_RELEASE_VERSION, YAB_VERSION, GIT_SHA1);
 
   shader_cache_path = nx::dataPath("cache/");
   snprintf(buppath, sizeof(buppath), "%s", nx::dataPath("backup.bin").c_str());

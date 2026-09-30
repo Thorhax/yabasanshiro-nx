@@ -33,6 +33,10 @@ constexpr SaturnChoice SATURN_SH2_CORES[] = {{"dynarec", "Dynarec (fast)"},
 constexpr SaturnChoice SATURN_FRAME_LIMITS[] = {{"0", "60 Hz"}, {"2", "120 Hz"}, {"1", "Unlimited"}};
 constexpr SaturnChoice SATURN_CARTRIDGES[] = {{"0", "None"}, {"6", "1 MB RAM"}, {"7", "4 MB RAM"}};
 constexpr SaturnChoice SATURN_SOUND_SYNC[] = {{"0", "Locked to CPU time"}, {"1", "Real time"}};
+constexpr SaturnChoice SATURN_BIOS[] = {{"auto", "Auto (disc region)"},
+                                        {"jp", "Japanese"},
+                                        {"us", "US / European"},
+                                        {"hle", "Emulated (no BIOS file)"}};
 constexpr SaturnChoice SATURN_RESOLUTIONS[] = {{"0", "Native (screen)"}, {"3", "Original"},
                                                {"2", "2x"},              {"1", "4x"},
                                                {"4", "720p"},            {"5", "1080p"}};
@@ -63,6 +67,11 @@ constexpr SaturnOption SATURN_EMULATION_OPTIONS[] = {
     {"emulation", "sound_sync", "Sound timing", "0", SATURN_SOUND_SYNC,
      "How the sound CPU keeps pace with the main CPUs. Locked keeps them exactly in step, which "
      "is the most accurate. Real time can help if a game's sound stutters."},
+    {"emulation", "bios", "BIOS", "auto", SATURN_BIOS,
+     "Which Saturn BIOS starts the game. Auto uses a Japanese BIOS for Japanese discs and a US / "
+     "European one for the rest; some games only run with one of them. Put the BIOS files in "
+     "switch/yabasanshiro/bios (sega_101.bin is the Japanese one, mpr-17933.bin the US / "
+     "European one). Emulated doesn't need a BIOS file but a few games misbehave with it."},
 };
 
 constexpr SaturnOption SATURN_VIDEO_OPTIONS[] = {
@@ -141,19 +150,29 @@ std::optional<SettingHelpInfo> SaturnSettingHelp(std::string_view label)
   }
   if (label == "Emulation")
     return SettingHelpInfo{"Settings group",
-                           "CPU core, speed limit, expansion cartridge and sound timing."};
+                           "CPU core, speed limit, expansion cartridge, sound timing and BIOS."};
   if (label == "Video")
     return SettingHelpInfo{"Settings group",
                            "Resolution, the rotating background layer, polygons, aspect ratio "
                            "and frame pacing."};
   if (label == "Controls")
     return SettingHelpInfo{"Settings group",
-                           "Which Switch buttons press each Saturn pad button, for players 1 "
-                           "and 2."};
-  if (label == "Player 1" || label == "Player 2")
+                           "The controller type (Saturn pad, 3D pad or Twin Stick) and button "
+                           "mapping for players 1 and 2."};
+  if (label == "Player 1 controller" || label == "Player 2 controller")
+    return SettingHelpInfo{
+        "Controller",
+        "The controller plugged into this player's Saturn port. Saturn pad suits most games. "
+        "3D pad (analog) is the NiGHTS pad in analog mode: the left stick is its analog stick "
+        "and ZL / ZR its analog triggers; only games made for it (NiGHTS, Burning Rangers, "
+        "Panzer Dragoon Saga...) understand it, so it's best set per game. Twin Stick (Virtual "
+        "On) steers with both Switch sticks like the arcade levers. Not connected leaves the "
+        "port empty, for games that wait for player 2 when a second controller is plugged in. "
+        "Each type keeps its own button mapping."};
+  if (label == "Player 1 buttons" || label == "Player 2 buttons")
     return SettingHelpInfo{"Controller",
-                           "Opens this player's Saturn pad mapping. Player 1 also accepts the "
-                           "handheld Joy-Con."};
+                           "Which Switch buttons press each button of this player's controller. "
+                           "Player 1 also accepts the handheld Joy-Con."};
   if (label == "Clear game settings")
     return SettingHelpInfo{"Management action",
                            "Removes this game's own settings and controls, so it uses the "
@@ -527,15 +546,19 @@ std::optional<std::string> Launcher::CaptureSaturnButton(std::string_view label,
 void Launcher::SaturnMappingPage(int player, Game* game)
 {
   const bool per_game = game != nullptr;
-  const std::string section = SaturnPlayerSection(player);
+  // Each controller type has its own bindings
+  const nx::ControllerTypeInfo& type = nx::controllerTypeInfo(SaturnControllerType(player, game));
+  const auto& buttons = nx::buttonInfo(type.type);
+  const std::string section = SaturnPlayerSection(player) + std::string(type.section_suffix);
   const std::string title = per_game ? "Game controls" : "Controls";
   const std::string context = std::string(m_localization.Translate("Player")) + " " +
-                              std::to_string(player + 1) +
+                              std::to_string(player + 1) + " - " +
+                              std::string(m_localization.Translate(type.label)) +
                               (per_game ? " - " + game->title : std::string{});
   constexpr int count = static_cast<int>(std::size(SATURN_BUTTON_ORDER));
 
-  const auto button_at = [](int index) -> const nx::SaturnButton& {
-    return nx::kSaturnButtonInfo[SATURN_BUTTON_ORDER[index]];
+  const auto button_at = [&](int index) -> const nx::SaturnButton& {
+    return buttons[SATURN_BUTTON_ORDER[index]];
   };
   const auto global_binding = [&](const nx::SaturnButton& button) {
     const std::optional<std::string> value = GetSaturnGlobal(true, section, button.key);
@@ -607,7 +630,8 @@ void Launcher::SaturnMappingPage(int player, Game* game)
     ShowInfoCard(title, std::string("Saturn ") + std::string(button.label), "Controller mapping",
                  "Which Switch buttons press this Saturn button. Press A, then the Switch button, "
                  "trigger or stick direction to use; Plus adds another one instead of replacing. "
-                 "While binding, hold Plus to clear or Minus to cancel. Y resets the control.",
+                 "While binding, hold Plus to clear or Minus to cancel. Y resets the control. "
+                 "Each controller type keeps its own mapping.",
                  BindingLabel(effective_binding(button)),
                  per_game ? "Per-game setting" : "Global setting", true, false);
     BeginScreenFx();
@@ -705,7 +729,10 @@ void Launcher::SaturnMappingPage(int player, Game* game)
       const std::string value = local ? BindingLabel(*local) :
                                 per_game ? GlobalValueLabel(BindingLabel(global_binding(button))) :
                                            BindingLabel(global_binding(button));
-      DrawSettingsRowText(std::string("Saturn ") + std::string(button.label), value,
+      DrawSettingsRowText(type.type == nx::ControllerType::TwinStick ?
+                              std::string(button.label) :
+                              std::string("Saturn ") + std::string(button.label),
+                          value,
                           list_top + row * row_height, column_width, label_x, value_x, current,
                           current ? m_value : m_text, current ? m_value : m_dim, false,
                           row_height);
@@ -729,22 +756,121 @@ void Launcher::SaturnMappingPage(int player, Game* game)
   finish();
 }
 
+// The controller type a player uses: the game's own choice, else the global one
+std::string Launcher::SaturnControllerType(int player, Game* game)
+{
+  const std::string section = SaturnPlayerSection(player);
+  std::optional<std::string> value;
+  if (game)
+    value = GetGameSetting(*game, section, "type");
+  if (!value)
+    value = GetSaturnGlobal(true, section, "type");
+  return std::string(nx::controllerTypeInfo(Lower(Trim(value.value_or("pad")))).key);
+}
+
 void Launcher::SaturnControlsRoot(Game* game)
 {
+  const bool per_game = game != nullptr;
+  const auto type_label = [&](std::string_view key) {
+    return std::string(nx::controllerTypeInfo(key).label);
+  };
+  // Rows: controller, then buttons, for each player
   RunRows(
-      game ? "Game controls" : "Controls", game ? game->title : std::string{},
+      per_game ? "Game controls" : "Controls", per_game ? game->title : std::string{},
       [&] {
-        return std::vector<Row>{
-            Row{"Player 1", ">", true, false, false},
-            Row{"Player 2", ">", true, false, false},
-        };
+        std::vector<Row> rows;
+        for (int player = 0; player < nx::kMaxPlayers; ++player)
+        {
+          const std::string section = SaturnPlayerSection(player);
+          const std::string prefix = "Player " + std::to_string(player + 1) + " ";
+          const std::optional<std::string> local =
+              per_game ? GetGameSetting(*game, section, "type") : std::nullopt;
+          const std::optional<std::string> global = GetSaturnGlobal(true, section, "type");
+          const std::string global_label = type_label(Lower(Trim(global.value_or("pad"))));
+          rows.push_back({prefix + "controller",
+                          local ? type_label(Lower(Trim(*local))) :
+                          per_game ? GlobalValueLabel(global_label) :
+                                     global_label});
+          if (SaturnControllerType(player, game) == "none")
+            rows.push_back(Row{prefix + "buttons", "-", false, false, false});
+          else
+            rows.push_back(Row{prefix + "buttons", ">", true, false, false});
+        }
+        return rows;
       },
-      [&](int index, int) {
-        SaturnMappingPage(index, game);
-        BeginScreenFx();
+      [&](int index, int delta) {
+        const int player = index / 2;
+        if (index % 2 == 1)
+        {
+          if (SaturnControllerType(player, game) == "none")
+          {
+            Toast("No controller is connected to this port", 1000);
+            return false;
+          }
+          SaturnMappingPage(player, game);
+          BeginScreenFx();
+          return false;
+        }
+
+        const std::string section = SaturnPlayerSection(player);
+        const std::optional<std::string> local =
+            per_game ? GetGameSetting(*game, section, "type") : std::nullopt;
+        const std::string global = std::string(
+            nx::controllerTypeInfo(Lower(Trim(GetSaturnGlobal(true, section, "type").value_or("pad"))))
+                .key);
+        std::vector<std::string> choices;
+        if (per_game)
+          choices.push_back(UseGlobalValueLabel(type_label(global)));
+        int selected = 0;
+        const int offset = per_game ? 1 : 0;
+        for (std::size_t i = 0; i < nx::kControllerTypes.size(); ++i)
+        {
+          choices.emplace_back(nx::kControllerTypes[i].label);
+          const std::string current = per_game ? Lower(Trim(local.value_or(""))) : global;
+          if (nx::kControllerTypes[i].key == current && (!per_game || local))
+            selected = static_cast<int>(i) + offset;
+        }
+        const std::string label = "Player " + std::to_string(player + 1) + " controller";
+        if (delta == 0)
+          selected = Dropdown(label, choices, selected);
+        else
+          selected = (selected + (delta < 0 ? -1 : 1) + static_cast<int>(choices.size())) %
+                     static_cast<int>(choices.size());
+        if (selected < 0)
+          return false;
+
+        if (per_game)
+        {
+          SetGameSetting(*game, section, "type",
+                         selected == 0 ? std::nullopt :
+                                         std::optional<std::string>{std::string(
+                                             nx::kControllerTypes[selected - offset].key)});
+          game->has_game_config = RegularFileExists(GameIniPath(*game));
+        }
+        else
+        {
+          SetSaturnGlobal(true, section, "type",
+                          std::string(nx::kControllerTypes[selected].key));
+        }
         return false;
       },
-      true);
+      false,
+      [&](int index) {
+        if (index % 2 == 1)
+          return false;
+        const std::string section = SaturnPlayerSection(index / 2);
+        if (per_game)
+        {
+          SetGameSetting(*game, section, "type", std::nullopt);
+          game->has_game_config = RegularFileExists(GameIniPath(*game));
+        }
+        else
+        {
+          SetSaturnGlobal(true, section, "type", std::string("pad"));
+        }
+        return true;
+      },
+      [](int index) { return index % 2 == 0; });
 }
 
 // ---------------------------------------------------------------------------------------

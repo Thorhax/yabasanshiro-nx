@@ -142,6 +142,7 @@ void ensureDataDirs()
   mkdir("sdmc:/switch", 0777);
   mkdir(NX_DATA_DIR, 0777);
   mkdir(NX_DATA_DIR "/games", 0777);
+  mkdir(NX_DATA_DIR "/bios", 0777);
   mkdir(NX_DATA_DIR "/cache", 0777);
 }
 
@@ -213,6 +214,9 @@ static const char * kDefaultSettings =
   "cartridge = 0\n"
   "# Sound CPU timing: 0 = locked to emulated CPU time, 1 = real time\n"
   "sound_sync = 0\n"
+  "# BIOS: auto (Japanese BIOS for Japanese discs, US/EU for the rest),\n"
+  "# jp, us, or hle (the emulator's own BIOS). BIOS files go in bios/\n"
+  "bios = auto\n"
   "\n"
   "[video]\n"
   "# 0 = native, 1 = 4x, 2 = 2x, 3 = original, 4 = 720p, 5 = 1080p\n"
@@ -251,6 +255,7 @@ Settings loadSettings(const std::vector<std::string> & game_inis)
   s.frameskip = ini.getBool("emulation.frame_skip", s.frameskip);
   s.cart = ini.getInt("emulation.cartridge", s.cart);
   s.scsp_main_mode = ini.getInt("emulation.sound_sync", s.scsp_main_mode);
+  s.bios = lower(trim(ini.get("emulation.bios", s.bios)));
   s.resolution_mode = ini.getInt("video.resolution", s.resolution_mode);
   s.rbg_resolution_mode = ini.getInt("video.rbg_resolution", s.rbg_resolution_mode);
   s.rbg_compute_shader = ini.getBool("video.rbg_compute_shader", s.rbg_compute_shader);

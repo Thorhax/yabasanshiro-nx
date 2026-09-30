@@ -83,6 +83,7 @@ struct Settings {
   bool sync_render = true;        // Vdp2SyncVBlankOut
   int scsp_sync_per_frame = 1;
   int scsp_main_mode = 0;         // 0 .. sound CPU locked to emulated time, 1 .. real time
+  std::string bios = "auto";      // auto (by disc region), jp, us or hle (emulated BIOS)
 };
 
 std::string dataPath(const char * name);

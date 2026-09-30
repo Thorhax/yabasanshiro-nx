@@ -58,6 +58,84 @@ inline constexpr std::array<SaturnButton, kSaturnButtons> kSaturnButtonInfo = {{
   { "Z", "Z", "L" },
 }};
 
+// The controller plugged into each port, stored as "type" in that player's section:
+//   pad        Saturn control pad
+//   3dpad      Saturn 3D control pad in analog mode: the left stick is its analog stick and
+//              ZL / ZR its analog triggers (the D-pad and buttons are bound as for the pad)
+//   twinstick  Virtual On Twin Stick: a digital pad whose left lever is the D-pad and whose
+//              right lever presses face buttons, so Switch's two sticks steer like the levers
+//   none       nothing plugged in (some games wait for player 2 otherwise)
+// Each type keeps its own bindings, in "player1", "player1_3dpad" or "player1_twinstick".
+enum class ControllerType { Pad, Pad3D, TwinStick, None };
+
+struct ControllerTypeInfo {
+  ControllerType type;
+  std::string_view key;          // value of "type"
+  std::string_view label;        // shown in the launcher
+  std::string_view section_suffix;
+};
+
+inline constexpr std::array<ControllerTypeInfo, 4> kControllerTypes = {{
+  { ControllerType::Pad, "pad", "Saturn pad", "" },
+  { ControllerType::Pad3D, "3dpad", "3D pad (analog)", "_3dpad" },
+  { ControllerType::TwinStick, "twinstick", "Twin Stick (Virtual On)", "_twinstick" },
+  { ControllerType::None, "none", "Not connected", "" },
+}};
+
+inline const ControllerTypeInfo & controllerTypeInfo(std::string_view key)
+{
+  for (const ControllerTypeInfo & info : kControllerTypes)
+    if (info.key == key) return info;
+  return kControllerTypes[0];
+}
+
+// The 3D pad's stick is analog, so the left stick isn't also bound to its D-pad
+inline constexpr std::array<SaturnButton, kSaturnButtons> k3DPadButtonInfo = {{
+  { "UP", "D-Pad up", "DUP" },
+  { "RIGHT", "D-Pad right", "DRIGHT" },
+  { "DOWN", "D-Pad down", "DDOWN" },
+  { "LEFT", "D-Pad left", "DLEFT" },
+  { "R", "R trigger", "ZR" },
+  { "L", "L trigger", "ZL" },
+  { "START", "Start", "PLUS" },
+  { "A", "A", "B" },
+  { "B", "B", "A" },
+  { "C", "C", "R" },
+  { "X", "X", "Y" },
+  { "Y", "Y", "X" },
+  { "Z", "Z", "L" },
+}};
+
+// Virtual On's Twin Stick (HSS-0154) is a standard digital pad inside, wired as:
+//   left lever = D-pad, left trigger = L, left thumb = R
+//   right lever up / down / left / right = Y / B / X / Z, right trigger = A, right thumb = C
+// Triggers fire weapons and thumb buttons dash; both triggers together (L + A) is the centre
+// weapon, which Switch Y also presses in one go.
+inline constexpr std::array<SaturnButton, kSaturnButtons> kTwinStickButtonInfo = {{
+  { "UP", "Left lever up", "LS_UP DUP" },
+  { "RIGHT", "Left lever right", "LS_RIGHT DRIGHT" },
+  { "DOWN", "Left lever down", "LS_DOWN DDOWN" },
+  { "LEFT", "Left lever left", "LS_LEFT DLEFT" },
+  { "R", "Left thumb, dash (R)", "ZL" },
+  { "L", "Left trigger, weapon (L)", "L Y" },
+  { "START", "Start", "PLUS" },
+  { "A", "Right trigger, weapon (A)", "R Y" },
+  { "B", "Right lever down (B)", "RS_DOWN" },
+  { "C", "Right thumb, dash (C)", "ZR" },
+  { "X", "Right lever left (X)", "RS_LEFT" },
+  { "Y", "Right lever up (Y)", "RS_UP" },
+  { "Z", "Right lever right (Z)", "RS_RIGHT" },
+}};
+
+inline const std::array<SaturnButton, kSaturnButtons> & buttonInfo(ControllerType type)
+{
+  switch (type) {
+  case ControllerType::Pad3D: return k3DPadButtonInfo;
+  case ControllerType::TwinStick: return kTwinStickButtonInfo;
+  default: return kSaturnButtonInfo;
+  }
+}
+
 struct SwitchButtonName {
   std::string_view key;
   std::string_view label;

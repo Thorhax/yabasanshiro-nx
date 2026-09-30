@@ -19,7 +19,7 @@
 #include <vector>
 
 #ifndef YAB_NX_RELEASE_VERSION
-#define YAB_NX_RELEASE_VERSION "0.3.0"
+#define YAB_NX_RELEASE_VERSION "1.0.0"
 #endif
 
 namespace DolphinSwitch::CoverDownload

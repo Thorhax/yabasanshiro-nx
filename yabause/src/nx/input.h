@@ -36,8 +36,8 @@ struct ButtonMap {
 class Input {
 public:
   // Loads NX_DATA_DIR/input.ini (writing the defaults if missing), with the
-  // game's own bindings (if any) over it, and attaches a standard Saturn pad
-  // to each port.
+  // game's own bindings (if any) over it, and attaches each player's controller
+  // type (Saturn pad, 3D pad or Twin Stick) to their port.
   void init(const std::vector<std::string> & game_inis = {});
 
   // Reads the Switch controllers.
@@ -51,9 +51,15 @@ public:
   u64 held(int player) const { return held_[player]; }
   u64 down(int player) const { return down_[player]; }
 
+  ControllerType type(int player) const { return types_[player]; }
+
 private:
   PadState pads_[kMaxPlayers];
   ButtonMap maps_[kMaxPlayers];
+  ControllerType types_[kMaxPlayers] = {};
+  // The 3D pad's analog data (NULL for the other controllers), and the axis values last sent
+  void * analog_[kMaxPlayers] = {};
+  u8 axes_prev_[kMaxPlayers][4] = {};
   u64 held_[kMaxPlayers] = {};
   u64 down_[kMaxPlayers] = {};
   u32 saturn_prev_[kMaxPlayers] = {};

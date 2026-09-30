@@ -59,6 +59,8 @@ extern "C" {
 #include "config.h"
 #include "input.h"
 #include "DolphinSwitch/Launcher.h"
+#include "DolphinSwitch/RuntimeOverlay.h"
+#include "overlay.h"
 #include "sh2_dynarec_devmiyax/dynarec_jit_nx.h"
 
 // Must match sh2_dynarec_devmiyax/DynarecSh2CInterface.cpp
@@ -67,6 +69,8 @@ extern "C" {
 static EGLDisplay s_display;
 static EGLContext s_context;
 static EGLSurface s_surface;
+static int s_surface_width = 1280;
+static int s_surface_height = 720;
 
 static char biospath[512];
 static char cdpath[512];
@@ -143,6 +147,8 @@ void YuiErrorMsg(const char *string)
 
 void YuiSwapBuffers(void)
 {
+  // Render thread, with the finished frame in the back buffer
+  nx::overlay::onPresent(s_surface_width, s_surface_height);
   eglSwapBuffers(s_display, s_surface);
 }
 
@@ -558,6 +564,113 @@ enum class SessionEnd {
 
 // Runs one game until the player quits it, then tears the emulator down again so the
 // launcher can take over the screen.
+enum class MenuEnd {
+  Resume,
+  BackToLauncher,
+  ExitApp,
+};
+
+static std::string stateDirectory()
+{
+  return nx::dataPath("states");
+}
+
+// Carries out what the player picked in the quick menu. Runs on the main thread while the
+// game is paused and the main thread holds the GL context (saving a state reads the sprite
+// framebuffer back from the GPU).
+static bool runMenuAction(const DolphinSwitch::RuntimeOverlay::Action & action)
+{
+  using DolphinSwitch::RuntimeOverlay::ActionType;
+  namespace menu = DolphinSwitch::RuntimeOverlay;
+  const std::string slot = std::to_string(action.value);
+  switch (action.type) {
+  case ActionType::StopToLauncher:
+    return true;
+  case ActionType::SaveState: {
+    const int rc = YabSaveStateSlot(stateDirectory().c_str(), (u8)action.value);
+    printf("Save state slot %d: %d\n", action.value, rc);
+    menu::RefreshStateInfo();
+    menu::SetStatus(rc == 0 ? "Saved state to slot " + slot : "Failed to save state to slot " + slot);
+    break;
+  }
+  case ActionType::LoadState: {
+    const int rc = YabLoadStateSlot(stateDirectory().c_str(), (u8)action.value);
+    printf("Load state slot %d: %d\n", action.value, rc);
+    if (rc == 0) {
+      menu::Close();
+      menu::SetStatus("Loaded state from slot " + slot);
+    } else {
+      menu::SetStatus("Failed to load state from slot " + slot);
+    }
+    break;
+  }
+  case ActionType::Reset:
+    YabauseResetButton();
+    menu::SetStatus("Console reset");
+    break;
+  case ActionType::EjectDisc:
+    Cs2ForceOpenTray();
+    menu::SetStatus("Disc tray opened");
+    break;
+  case ActionType::ChangeDisc:
+    snprintf(cdpath, sizeof(cdpath), "%s", action.path.c_str());
+    printf("Change disc: %s\n", cdpath);
+    Cs2ForceCloseTray(CDCORE_ISO, cdpath);
+    menu::SetStatus("Disc changed");
+    break;
+  case ActionType::ToggleFPS:
+    menu::SetShowFPS(!menu::ShowFPS());
+    break;
+  }
+  return false;
+}
+
+// The quick menu: pauses the game and shows the menu over its last frame until closed.
+static MenuEnd runQuickMenu(int width, int height)
+{
+  namespace menu = DolphinSwitch::RuntimeOverlay;
+
+  // One more frame, with the pads released, so the render thread copies it for the background
+  s_input.apply(false);
+  nx::overlay::requestCapture();
+  YabauseExec();
+  s_frames_done++;
+  s_progress++;
+
+  ScspMuteAudio(SCSP_MUTE_SYSTEM);
+  VdpRevoke();
+  YuiUseOGLOnThisThread();
+
+  MenuEnd end = MenuEnd::Resume;
+  while (end == MenuEnd::Resume) {
+    const u64 frame_start = armGetSystemTick();
+    if (!appletMainLoop()) {
+      end = MenuEnd::ExitApp;
+      break;
+    }
+    s_input.poll();
+    menu::UpdateInput(s_input.down(0), s_input.held(0));
+    for (const menu::Action & action : menu::TakeActions())
+      if (runMenuAction(action)) end = MenuEnd::BackToLauncher;
+    if (end != MenuEnd::Resume || !menu::IsVisible())
+      break;
+
+    nx::overlay::drawPaused(width, height);
+    eglSwapBuffers(s_display, s_surface);
+    s_progress++;
+
+    // About 60 frames a second
+    const u64 elapsed = armTicksToNs(armGetSystemTick() - frame_start);
+    if (elapsed < 16000000ULL)
+      svcSleepThread(16000000ULL - elapsed);
+  }
+
+  YuiRevokeOGLOnThisThread();
+  VdpResume();
+  ScspUnMuteAudio(SCSP_MUTE_SYSTEM);
+  return end;
+}
+
 // 'game_inis' are the game's own settings files (overrides of settings.ini and input.ini),
 // later ones winning
 static SessionEnd runGame(const std::string & game, const std::vector<std::string> & game_inis)
@@ -605,6 +718,7 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
 
   // Each game gets a fresh context
   nx_glShimReset();
+  nx::overlay::attachContext();
   s_gl_log_count = 0;
   glEnable(GL_DEBUG_OUTPUT);
   glDebugMessageCallback(glDebugLog, NULL);
@@ -617,9 +731,12 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     height = window_height;
   }
   printf("Display: %dx%d (%s)\n", width, height, docked ? "docked" : "handheld");
+  s_surface_width = width;
+  s_surface_height = height;
 
   if (yabauseinit(s_use_bios) == -1) {
     printf("YabauseInit failed\n");
+    nx::overlay::detachContext();
     deinitEgl();
     return SessionEnd::ExitApp;
   }
@@ -632,6 +749,11 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
 
   resizeVideo(width, height);
 
+  // Save states are named after the disc's product number
+  const char * game_code = Cs2GetCurrentGmaecode();
+  DolphinSwitch::RuntimeOverlay::BeginSession(game, stateDirectory(), game_code ? game_code : "",
+                                              false);
+
   s_frames_done = 0;
   s_phase = Phase::Game;
 
@@ -640,14 +762,23 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   SessionEnd end = SessionEnd::ExitApp;
 
   while (appletMainLoop()) {
-    s_input.update();
+    s_input.poll();
 
-    // Hold MINUS + PLUS to leave the game
-    u64 held = s_input.held(0);
-    if ((held & HidNpadButton_Minus) && (held & HidNpadButton_Plus)) {
-      end = SessionEnd::BackToLauncher;
-      break;
+    // MINUS + PLUS opens the quick menu, which pauses the game
+    DolphinSwitch::RuntimeOverlay::UpdateInput(s_input.down(0), s_input.held(0));
+    if (DolphinSwitch::RuntimeOverlay::IsVisible()) {
+      const MenuEnd menu_end = runQuickMenu(width, height);
+      if (menu_end == MenuEnd::BackToLauncher) {
+        end = SessionEnd::BackToLauncher;
+        break;
+      }
+      if (menu_end == MenuEnd::ExitApp)
+        break;
+      stats_frames = 0;
+      stats_start = armGetSystemTick();
+      continue;
     }
+    s_input.apply(!DolphinSwitch::RuntimeOverlay::IsInputCaptured());
 
     YabauseExec(); // one frame
     s_frames_done++;
@@ -660,9 +791,14 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     // Emulation speed and disc status in the log every few seconds
     stats_frames++;
     u64 elapsed_ns = armTicksToNs(armGetSystemTick() - stats_start);
+    // The FPS counter wants fresher numbers than the log
+    if (elapsed_ns >= 1000000000ULL && DolphinSwitch::RuntimeOverlay::ShowFPS()) {
+      nx::overlay::setFps((float)(stats_frames * 1e9 / (double)elapsed_ns));
+    }
     if (elapsed_ns >= 5000000000ULL) {
-      printf("frames/s %.1f, game code '%s'\n",
-        stats_frames * 1e9 / (double)elapsed_ns, Cs2GetCurrentGmaecode());
+      const double fps = stats_frames * 1e9 / (double)elapsed_ns;
+      printf("frames/s %.1f, game code '%s'\n", fps, Cs2GetCurrentGmaecode());
+      nx::overlay::setFps((float)fps);
       stats_frames = 0;
       stats_start = armGetSystemTick();
     }
@@ -681,6 +817,9 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   VdpRevoke();
   YuiUseOGLOnThisThread();
   glFinish();
+
+  DolphinSwitch::RuntimeOverlay::EndSession();
+  nx::overlay::detachContext();
 
   printf("YabauseDeInit\n");
   YabauseDeInit();
@@ -708,6 +847,8 @@ int main(int argc, char** argv)
   const bool romfs = R_SUCCEEDED(romfsInit());
   if (!romfs)
     printf("romfsInit failed\n");
+  mkdir(stateDirectory().c_str(), 0777);
+  nx::overlay::init();
 
   // Higher priority than the emulator threads so a spinning thread can't starve it
   s_main_thread = threadGetCurHandle();
@@ -767,6 +908,7 @@ int main(int argc, char** argv)
   // The dynarec's code buffer lives as long as the app; hbloader aborts if
   // code memory is still mapped when we return to it
   DynaJitShutdown();
+  nx::overlay::shutdown();
   SDL_Quit();
   if (romfs)
     romfsExit();

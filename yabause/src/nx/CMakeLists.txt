@@ -20,11 +20,26 @@ set(yabause_nx_SOURCES
 	config.cpp
 	input.cpp
 	gl_shim.c
+	overlay.cpp
 )
+
+# Dear ImGui (nx/imgui, the version NaGa's frontend uses) for the in-game quick menu
+set(imgui_SOURCES
+	imgui/imgui.cpp
+	imgui/imgui_draw.cpp
+	imgui/imgui_tables.cpp
+	imgui/imgui_widgets.cpp
+	imgui/backends/imgui_impl_opengl3.cpp
+)
+# The OpenGL backend uses the same glad functions as the renderer instead of its own loader
+set_source_files_properties(imgui/backends/imgui_impl_opengl3.cpp PROPERTIES
+	COMPILE_DEFINITIONS IMGUI_IMPL_OPENGL_LOADER_CUSTOM
+	COMPILE_OPTIONS "-include;glad/glad.h")
 
 set(launcher_SOURCES
 	launcher/DolphinSwitch/Launcher.cpp
 	launcher/DolphinSwitch/Localization.cpp
+	launcher/DolphinSwitch/RuntimeOverlay.cpp
 	launcher/DolphinSwitch/SystemLanguage.cpp
 	launcher/DolphinSwitch/UiAudio.cpp
 	launcher/FrontendAudio.cpp
@@ -39,8 +54,9 @@ set_source_files_properties(${launcher_SOURCES} PROPERTIES
 
 include_directories( ${YABAUSE_INCLUDE_DIR} ${PORT_INCLUDE_DIRS} )
 link_directories( /opt/devkitpro/devkitA64/lib/ /opt/devkitpro/libnx/lib/ /opt/devkitpro/portlibs/switch/lib/  )
-add_executable(yabause-nx ${yabause_nx_SOURCES} ${launcher_SOURCES})
-target_include_directories(yabause-nx PRIVATE launcher)
+add_executable(yabause-nx ${yabause_nx_SOURCES} ${launcher_SOURCES} ${imgui_SOURCES})
+target_include_directories(yabause-nx PRIVATE launcher imgui)
+target_compile_definitions(yabause-nx PRIVATE IMGUI_DISABLE_DEMO_WINDOWS IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS)
 target_link_libraries(yabause-nx yabause ${YABAUSE_LIBRARIES} ${LIBCHDR_LIBRARIES} ${PORT_LIBRARIES}  )
 
 set( CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -g -Wl,-Map,memory.map" )

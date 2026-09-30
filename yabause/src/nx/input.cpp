@@ -148,15 +148,24 @@ void Input::init(const std::vector<std::string> & game_inis)
   }
 }
 
-void Input::update()
+void Input::poll()
 {
   for (int p = 0; p < kMaxPlayers; p++) {
     padUpdate(&pads_[p]);
+    const u64 previous = held_[p];
     held_[p] = padGetButtons(&pads_[p]);
+    down_[p] = held_[p] & ~previous;
+  }
+}
 
+void Input::apply(bool forward)
+{
+  for (int p = 0; p < kMaxPlayers; p++) {
     u32 saturn = 0;
-    for (int i = 0; i < kSaturnButtons; i++)
-      if (held_[p] & maps_[p].bind[i]) saturn |= 1u << i;
+    if (forward) {
+      for (int i = 0; i < kSaturnButtons; i++)
+        if (held_[p] & maps_[p].bind[i]) saturn |= 1u << i;
+    }
 
     // Only tell the emulator about changes
     u32 changed = saturn ^ saturn_prev_[p];

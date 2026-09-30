@@ -40,16 +40,22 @@ public:
   // to each port.
   void init(const std::vector<std::string> & game_inis = {});
 
-  // Reads the Switch controllers and forwards the result to the emulator.
-  void update();
+  // Reads the Switch controllers.
+  void poll();
+  // Sends what poll() read to the emulated pads; with forward false (a menu has the
+  // controllers) every Saturn button is released instead.
+  void apply(bool forward);
+  void update() { poll(); apply(true); }
 
-  // Buttons held on player 1's controller this frame (for hotkeys).
+  // Switch buttons held / newly pressed this frame (for hotkeys and menus).
   u64 held(int player) const { return held_[player]; }
+  u64 down(int player) const { return down_[player]; }
 
 private:
   PadState pads_[kMaxPlayers];
   ButtonMap maps_[kMaxPlayers];
   u64 held_[kMaxPlayers] = {};
+  u64 down_[kMaxPlayers] = {};
   u32 saturn_prev_[kMaxPlayers] = {};
 };
 

@@ -995,52 +995,8 @@ void YglDrawCpuFramebufferWrite(int target) {
 
 
 
-void VIDOGLVdp1ReadFrameBuffer(u32 type, u32 addr, void * out) {
-  u32 x = 0;
-  u32 y = 0;
-  int tvmode = (Vdp1Regs->TVMR & 0x7);
-  switch( tvmode ) {
-    case 0: // 16bit 512x256
-    case 2: // 16bit 512x256
-    case 4: // 16bit 512x256
-      y = (addr >> 10)&0x1FF;
-      x = (addr & 0x3FF) >> 1;
-      break;
-    case 1: // 8bit 1024x256
-      y = (addr >> 10)&0x3FF;
-      x = addr & 0x3FF;
-      break;
-    case 3: // 8bit 512x512
-      y = (addr >> 9)&0x1FF;
-      x = addr & 0x1FF;
-      break;
-    defalut:
-      y = 0;
-      x = 0;
-      break;
-  }
-
-  const int Line = y;
-  const int Pix = x;
-  if (_Ygl->cpu_framebuffer_write[_Ygl->drawframe] || (Pix >= Vdp1Regs->systemclipX2 || Line >= Vdp1Regs->systemclipY2)){
-    switch (type)
-    {
-    case 0:
-      *(u8*)out = T1ReadByte(Vdp1FrameBuffer[_Ygl->drawframe], addr);
-      break;
-    case 1:
-      *(u16*)out = T1ReadWord(Vdp1FrameBuffer[_Ygl->drawframe], addr);
-      break;
-    case 2:
-      *(u32*)out = T1ReadLong(Vdp1FrameBuffer[_Ygl->drawframe], addr);
-      break;
-    default:
-      break;
-    }
-    return;
-  }
-
-
+// Creates the objects reading the VDP1 framebuffer back uses. Needs the GL context.
+static void YglVdp1ReadBackCreate(void) {
   if (_Ygl->smallfbo == 0) {
       GLuint error;
       YabThreadLock(_Ygl->mutex);
@@ -1089,11 +1045,11 @@ void VIDOGLVdp1ReadFrameBuffer(u32 type, u32 addr, void * out) {
       glBindFramebuffer(GL_FRAMEBUFFER, _Ygl->default_fbo);
       YabThreadUnLock(_Ygl->mutex);
   }
+}
 
-
-  while (_Ygl->vpd1_running){ YabThreadYield(); }
-
-  YabThreadLock(_Ygl->mutex);
+// Copies the VDP1 frame into memory, at _Ygl->pFrameBuffer (NULL if that fails), unless this
+// frame's copy is already there. Needs the GL context; the caller holds _Ygl->mutex.
+static void YglVdp1ReadBack(void) {
   if (_Ygl->pFrameBuffer == NULL){
     FrameProfileAdd("ReadFrameBuffer start");
     FRAMELOG("READ FRAME");
@@ -1118,7 +1074,7 @@ void VIDOGLVdp1ReadFrameBuffer(u32 type, u32 addr, void * out) {
     glDisable(GL_SCISSOR_TEST);
     YglBlitFramebuffer(_Ygl->vdp1FrameBuff[_Ygl->drawframe], _Ygl->smallfbo, (float)_Ygl->rwidth / (float)_Ygl->width, (float)_Ygl->rheight / (float)_Ygl->height);
 #endif
-    YGLLOG("VIDOGLVdp1ReadFrameBuffer %d %08X\n", _Ygl->drawframe, addr);
+    YGLLOG("VIDOGLVdp1ReadFrameBuffer %d\n", _Ygl->drawframe);
     FrameProfileAdd("ReadFrameBuffer unlock");
     glBindFramebuffer(GL_FRAMEBUFFER, _Ygl->smallfbo);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, _Ygl->vdp1pixelBufferID);
@@ -1127,19 +1083,113 @@ void VIDOGLVdp1ReadFrameBuffer(u32 type, u32 addr, void * out) {
     glBindFramebuffer(GL_FRAMEBUFFER,_Ygl->default_fbo);
     glViewport(params[0], params[1], params[2], params[3]);
 
-    if (_Ygl->pFrameBuffer==NULL){
-      switch (type) {
-      case 1:
-        *(u16*)out = 0x0000;
-        break;
-      case 2:
-        *(u32*)out = 0x00000000;
-        break;
-      }
-      YabThreadUnLock(_Ygl->mutex);
-      return;
-    }
     FrameProfileAdd("ReadFrameBuffer end");
+  }
+}
+
+#ifdef NX
+// On the Switch only the render thread may use GL: two threads using the GPU at once through
+// Mesa's nouveau driver hangs the console, so the renderer can't give the emulation thread a
+// context of its own as other ports do. The emulation thread asks the render thread for the
+// copy instead (VdpNxReadVdp1FrameBuffer, before taking the VRAM lock) and then reads it here.
+
+// Whether reading 'addr' needs a fresh copy from the render thread: not when it's served from
+// memory (CPU-written frames, outside the clip area) or this frame's copy is already there
+int YglNxVdp1ReadNeedsCopy(u32 addr) {
+  u32 x = 0, y = 0;
+  switch (Vdp1Regs->TVMR & 0x7) {
+    case 0: case 2: case 4: y = (addr >> 10) & 0x1FF; x = (addr & 0x3FF) >> 1; break;
+    case 1: y = (addr >> 10) & 0x3FF; x = addr & 0x3FF; break;
+    case 3: y = (addr >> 9) & 0x1FF; x = addr & 0x1FF; break;
+    default: break;
+  }
+  if (_Ygl->cpu_framebuffer_write[_Ygl->drawframe] ||
+      x >= Vdp1Regs->systemclipX2 || y >= Vdp1Regs->systemclipY2)
+    return 0;
+  return _Ygl->pFrameBuffer == NULL;
+}
+
+// Render thread
+void YglNxVdp1ReadBack(void) {
+  YglVdp1ReadBackCreate();
+  YabThreadLock(_Ygl->mutex);
+  YglVdp1ReadBack();
+  YabThreadUnLock(_Ygl->mutex);
+}
+#endif
+
+void VIDOGLVdp1ReadFrameBuffer(u32 type, u32 addr, void * out) {
+  u32 x = 0;
+  u32 y = 0;
+  int tvmode = (Vdp1Regs->TVMR & 0x7);
+  switch( tvmode ) {
+    case 0: // 16bit 512x256
+    case 2: // 16bit 512x256
+    case 4: // 16bit 512x256
+      y = (addr >> 10)&0x1FF;
+      x = (addr & 0x3FF) >> 1;
+      break;
+    case 1: // 8bit 1024x256
+      y = (addr >> 10)&0x3FF;
+      x = addr & 0x3FF;
+      break;
+    case 3: // 8bit 512x512
+      y = (addr >> 9)&0x1FF;
+      x = addr & 0x1FF;
+      break;
+    defalut:
+      y = 0;
+      x = 0;
+      break;
+  }
+
+  const int Line = y;
+  const int Pix = x;
+  if (_Ygl->cpu_framebuffer_write[_Ygl->drawframe] || (Pix >= Vdp1Regs->systemclipX2 || Line >= Vdp1Regs->systemclipY2)){
+    switch (type)
+    {
+    case 0:
+      *(u8*)out = T1ReadByte(Vdp1FrameBuffer[_Ygl->drawframe], addr);
+      break;
+    case 1:
+      *(u16*)out = T1ReadWord(Vdp1FrameBuffer[_Ygl->drawframe], addr);
+      break;
+    case 2:
+      *(u32*)out = T1ReadLong(Vdp1FrameBuffer[_Ygl->drawframe], addr);
+      break;
+    default:
+      break;
+    }
+    return;
+  }
+
+
+#ifndef NX
+  YglVdp1ReadBackCreate();
+#endif
+
+
+#ifndef NX
+  while (_Ygl->vpd1_running){ YabThreadYield(); }
+#endif
+
+  YabThreadLock(_Ygl->mutex);
+#ifndef NX
+  YglVdp1ReadBack();
+#endif
+  // No copy: the read-back failed (or, on the Switch, the renderer dropped this frame's copy
+  // after it was made), so this reads as blank
+  if (_Ygl->pFrameBuffer == NULL) {
+    switch (type) {
+    case 1:
+      *(u16*)out = 0x0000;
+      break;
+    case 2:
+      *(u32*)out = 0x00000000;
+      break;
+    }
+    YabThreadUnLock(_Ygl->mutex);
+    return;
   }
 
   int index;

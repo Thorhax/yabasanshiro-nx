@@ -770,7 +770,9 @@ void patch_nacp(NacpStruct &nacp, const std::string &name, const std::string &au
     nacp.user_account_switch_lock = 0x00;
     nacp.add_on_content_registration_type = 0x01;
     nacp.screenshot = 0;
-    nacp.video_capture = 0x2;
+    // No background gameplay recording: the system's recorder (grc) crashed Atmosphère with
+    // it on, while a game was running slowly
+    nacp.video_capture = 0x0;
     nacp.logo_type = 0x2;
     nacp.logo_handling = 0x0;
     nacp.data_loss_confirmation = 0x0;

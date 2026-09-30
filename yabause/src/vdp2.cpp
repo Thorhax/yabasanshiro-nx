@@ -52,6 +52,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #include "vdp1.h"
 #include "yabause.h"
 #include "movie.h"
+#ifdef NX
+extern "C" void YglNxVdp1ReadBack(void);
+#endif
 #include "osdcore.h"
 #include "threads.h"
 #include "yui.h"
@@ -567,6 +570,12 @@ extern "C" void * VdpProc( void *arg ){
       YuiRevokeOGLOnThisThread();
       YabAddEventQueue(command_,0);
       break;
+#ifdef NX
+    case VDPEV_NX_READ_VDP1:
+      YglNxVdp1ReadBack();
+      YabAddEventQueue(command_,0);
+      break;
+#endif
     case VDPEV_FINSH:
       vdp_proc_running = 0;
       break;
@@ -2612,6 +2621,13 @@ void VdpRevoke( void ){
   YabWaitEventQueue(command_);
 #endif
 }
+
+#ifdef NX
+void VdpNxReadVdp1FrameBuffer( void ){
+	YabAddEventQueue(evqueue,VDPEV_NX_READ_VDP1);
+  YabWaitEventQueue(command_);
+}
+#endif
 
 
 

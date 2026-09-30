@@ -27,6 +27,8 @@ NaGa's [Dolphin NX](https://github.com/NaGaa95/dolphin-nx) frontend.
 ## Requirements
 
 - A Switch running custom firmware (Atmosphère) with the homebrew menu.
+- **The CPU overclocked to 1785 MHz** (with sys-clk or a similar tool). At the stock clock many
+  games won't hold full speed.
 - HOME Menu shortcuts also need signature patches.
 - A Saturn BIOS is recommended (see [BIOS](#bios)); without one the emulator uses its own
   high-level BIOS, which a few games don't like.
@@ -37,7 +39,7 @@ NaGa's [Dolphin NX](https://github.com/NaGaa95/dolphin-nx) frontend.
 2. Copy it to `switch/yabasanshiro/` on the SD card.
 3. Put your games in `switch/yabasanshiro/games/` (subfolders are fine), and your BIOS files in
    `switch/yabasanshiro/bios/`.
-4. Start **YabaSanshiro NX** from the homebrew menu.
+4. Set the CPU to 1785 MHz, then start **YabaSanshiro NX** from the homebrew menu.
 
 Everything the app keeps lives in `switch/yabasanshiro/`:
 

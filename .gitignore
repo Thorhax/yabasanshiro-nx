@@ -25,3 +25,6 @@ yabause/src/ios/uoyabause/uoyabause/GoogleService-Info-lite.plist
 bin*/*
 yabause/src/qt/firebase_cpp_sdk*/*
 **/._.DS_Store/*
+# Switch port build (yabause/src/nx/build_switch.sh)
+/build.log
+/dist/

@@ -49,6 +49,14 @@ elseif(IOS)
     -DPLATFORM=${PLATFORM}
   )
 
+elseif(CMAKE_TOOLCHAIN_FILE)
+  # Cross builds such as the Switch port
+  get_filename_component(TOOL_CHAIN_ABSOLUTE_PATH "${CMAKE_TOOLCHAIN_FILE}"
+                       REALPATH BASE_DIR "${CMAKE_BINARY_DIR}")
+  set( ADDITIONAL_CMAKE_ARGS
+    -DCMAKE_TOOLCHAIN_FILE=${TOOL_CHAIN_ABSOLUTE_PATH}
+  )
+
 else()
   set(ADDITIONAL_CMAKE_ARGS "")
 endif()

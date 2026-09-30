@@ -1,12 +1,16 @@
 #!/bin/sh
+# Runs in the nx build directory after linking; writes yabasanshiro.nro two levels up.
+# $1: the nx source directory (for the icon and romfs)
 
 set -o xtrace
+set -e
 
-mv yabasanshiro yabasanshiro.elf
-elf2nro yabasanshiro.elf ../../yabasanshiro.nro
-elf2nso yabasanshiro.elf ../../yabasanshiro.nso
+SOURCE_DIR="$1"
+APP_TITLE="YabaSanshiro NX"
+APP_AUTHOR="devMiyax, Switch port"
+APP_VERSION="0.2.0"
 
-#mkdir -p exefs
-#cp yabasanshiro.nso ./exefs/main
-#build_pfs0 exefs yabasanshiro.pfs0
-
+mv -f yabasanshiro yabasanshiro.elf
+nacptool --create "${APP_TITLE}" "${APP_AUTHOR}" "${APP_VERSION}" yabasanshiro.nacp
+elf2nro yabasanshiro.elf ../../yabasanshiro.nro --nacp=yabasanshiro.nacp \
+  --icon="${SOURCE_DIR}/icon.jpg" --romfsdir="${SOURCE_DIR}/launcher/romfs"

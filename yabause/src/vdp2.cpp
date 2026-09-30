@@ -91,6 +91,23 @@ YabEventQueue * evqueue = NULL; // Event Queue for async rendring
 YabEventQueue * rcv_evqueue = NULL;
 YabEventQueue * vdp1_rcv_evqueue = NULL;
 YabEventQueue * vout_rcv_evqueue = NULL;
+
+#if defined(YAB_ASYNC_RENDERING)
+// TVMD display-enable bit as it was when VBLANK-OUT was posted. The render
+// thread handles that event while the emulation thread already runs the next
+// frame, which may switch the display off and on again; reading the live
+// register there could skip every VDP2 layer for a frame (a black flash).
+// Only one VBLANK-OUT is in flight: the emulation thread waits for the
+// render thread at every VBLANK-IN.
+static int vout_display_enabled = 0;
+
+extern "C" int Vdp2DisplayEnabledThisFrame(void)
+{
+  return vout_display_enabled;
+}
+#endif
+
+int Vdp2SyncVBlankOut = 1;
 static s64 syncticks = 0;       // CPU time sync for real time.
 static int vdp_proc_running = 0;
 YabMutex * vrammutex = NULL;
@@ -1037,8 +1054,13 @@ void Vdp2HBlankOUT(void) {
     }
 
     FRAMELOG("YabAddEventQueue(evqueue, VDPEV_VBLANK_OUT)");
+    vout_display_enabled = (Vdp2Regs->TVMD & 0x8000) != 0;
     YabAddEventQueue(evqueue, VDPEV_VBLANK_OUT);
-    YabThreadYield();
+    if (Vdp2SyncVBlankOut) {
+      YabWaitEventQueue(vout_rcv_evqueue);
+    } else {
+      YabThreadYield();
+    }
     //YabThreadUSleep(10000);
 
   }
@@ -1344,11 +1366,19 @@ void vdp2VBlankOUT(void) {
   //yabsys.wait_line_count = 45;
 #endif
 
+#if defined(YAB_ASYNC_RENDERING)
+  if (vout_display_enabled) {
+#else
   if (Vdp2Regs->TVMD & 0x8000) {
+#endif
      FRAMELOG("Vdp2DrawScreens Start %d", yabsys.LineCount);
     VIDCore->Vdp2DrawScreens();
     FRAMELOG("Vdp2DrawScreens End %d", yabsys.LineCount);
   }
+#if defined(YAB_ASYNC_RENDERING)
+  // VDP2 state has been consumed; let the emulation thread continue
+  if (Vdp2SyncVBlankOut) YabAddEventQueue(vout_rcv_evqueue, 0);
+#endif
 
   if (isrender){
      FRAMELOG("Vdp1DrawEnd %d", yabsys.LineCount);

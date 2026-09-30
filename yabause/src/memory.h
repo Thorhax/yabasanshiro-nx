@@ -444,6 +444,10 @@ extern "C" {
 
 // Mapped mewmory
 void * YabMemMap(char * filename, u32 size );
+#if defined(NX)
+void YabMemMapMarkDirty(u32 offset, u32 size);
+void YabMemMapFlush(void);
+#endif
 void YabFreeMap(void * p);
 int ExtendBackupFile(FILE *fp, u32 size );
 void FormatBackupRamFile(FILE *fp, u32 size);

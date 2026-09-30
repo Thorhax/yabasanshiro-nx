@@ -59,6 +59,13 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
     VirtualFree(x, a, MEM_RELEASE); \
     x = NULL;                       \
   }
+#elif defined(__SWITCH__)
+#include "dynarec_jit_nx.h"
+#define ALLOCATE(x) DynaJitAlloc(x);
+#define FREEMEM(x, a) DynaJitFree(x, a);
+// Blocks are written through the RW alias and run from the RX alias
+#define EXEC_ADDR(x) ((void*)((uintptr_t)(x) + g_dyna_jit_rx_offset))
+
 #elif defined(ARCH_IS_LINUX)
 #include <sys/mman.h>
 #define ALLOCATE(x) mmap(NULL, x, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS | MAP_FILE | MAP_PRIVATE, -1, 0);
@@ -78,6 +85,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #define FREEMEM(x, a) munmap(x, a);
 //#define ALLOCATE(x)	malloc(x)
 //#define FREEMEM(x,a)	if(x){ free(x); x = NULL;}
+#endif
+
+#ifndef EXEC_ADDR
+#define EXEC_ADDR(x) ((void*)(x))
 #endif
 
 const int MAX_INSTSIZE = 0xFFFF + 1;

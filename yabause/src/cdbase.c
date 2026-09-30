@@ -1097,7 +1097,7 @@ int LoadMDSTracks(const char *mds_filename, FILE *iso_file, mds_session_struct *
                else
                   wcscpy(filename, img_filename);
 
-#if defined(NX) || defined(IOS)
+#if defined(IOS)
                fp = fopen(filename, L"rb");
 #else
                fp = _wfopen(filename, L"rb");

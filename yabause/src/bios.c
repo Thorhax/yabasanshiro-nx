@@ -2024,6 +2024,9 @@ void BupFormat(u32 device)
       case 0:
         if (yabsys.extend_backup){
           FormatBackupRam(BupRam, tweak_backup_file_size);
+#if defined(NX)
+          YabMemMapMarkDirty(0, tweak_backup_file_size);
+#endif
         }
         else {
           FormatBackupRam(BupRam, 0x10000);

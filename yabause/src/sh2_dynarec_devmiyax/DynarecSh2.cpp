@@ -1398,7 +1398,9 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
   }
 #endif 
 
-#if defined(ARCH_IS_LINUX)
+#if defined(__SWITCH__)
+  DynaJitFlush(page->code, ptr);
+#elif defined(ARCH_IS_LINUX)
   cacheflush((uintptr_t)page->code,(uintptr_t)ptr,0);
 #endif
 
@@ -1717,16 +1719,16 @@ inline int DynarecSh2::Execute(){
     u32 prepc = GET_PC();
   if (is_slave_) { //statics_trigger_ == COLLECTING) {
     s64 pretime = YabauseGetTicks();
-    ((dynaFunc)((void*)(pBlock->code)))(m_pDynaSh2);
+    ((dynaFunc)EXEC_ADDR(pBlock->code))(m_pDynaSh2);
     //compie_statics_[prepc].count++;
     //compie_statics_[prepc].time += YabauseGetTicks() - pretime;
     //compie_statics_[prepc].end_addr = pBlock->e_addr;
   }
   else {
-    ((dynaFunc)((void*)(pBlock->code)))(m_pDynaSh2);
+    ((dynaFunc)EXEC_ADDR(pBlock->code))(m_pDynaSh2);
   }
 #else
-  ((dynaFunc)((void*)(pBlock->code)))(m_pDynaSh2);
+  ((dynaFunc)EXEC_ADDR(pBlock->code))(m_pDynaSh2);
 #endif
   
   if ((GET_SR() & 0xF0) < GET_ICOUNT()) {

@@ -94,8 +94,9 @@ endif()
 
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Switch")
 add_definitions(-DYAB_PORT_OSD)
-add_definitions(-D_OGLES3_)
-#add_definitions(-DYAB_ASYNC_RENDERING)
+# Desktop GL 4.3 core through Mesa/nouveau (see ygl.h)
+add_definitions(-D_OGL3_)
+add_definitions(-DYAB_ASYNC_RENDERING)
 add_definitions(-DYAB_PORT_OSD)
 include_directories(./ ./nanovg)		
 set(yabause_SOURCES
@@ -104,9 +105,11 @@ set(yabause_SOURCES
 	ygles.c
 	yglshaderes.c 
 	nanovg/nanovg.c 
-	nanovg/nanovg_osdcore.h 
+	nanovg/nanovg_osdcore.h
 	nanovg/nanovg_osdcore.c
 	)
+# No ifaddrs.h on libnx; the nx port doesn't use WebApiCD
+list(REMOVE_ITEM yabause_SOURCES cd-web.cpp)
 endif ()
 
 if (IOS)
@@ -167,6 +170,10 @@ if (YAB_WANT_DYNAREC_DEVMIYAX)
     ${yabause_SOURCES}
     sh2_dynarec_devmiyax/DynarecSh2CInterface.cpp  
 	  sh2_dynarec_devmiyax/DynarecSh2.cpp)
+
+	if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Switch")
+		set(yabause_SOURCES ${yabause_SOURCES} sh2_dynarec_devmiyax/dynarec_jit_nx.c)
+	endif ()
 
 	set(yabause_HEADERS
 		${yabause_HEADERS}

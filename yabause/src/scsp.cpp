@@ -106,7 +106,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #include <stdlib.h>
 #include <stdarg.h>
 #include <math.h>
-#include <limits.h>
+#include <climits>
 
 #include "c68k/c68k.h"
 #include "cs2.h"

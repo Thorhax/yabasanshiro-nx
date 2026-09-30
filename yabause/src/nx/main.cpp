@@ -18,117 +18,73 @@ along with YabaSanshiro; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 */
 
-#include <exception>
-#include <functional>
-#include <string>  
+#include <algorithm>
+#include <atomic>
+#include <optional>
+#include <string>
 #include <vector>
 
-#include <sys/types.h>
+#include <dirent.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <sys/resource.h>
-#include <errno.h>
-#include <pthread.h>
-
-#include <SDL2/SDL.h>
-#define GL_GLEXT_PROTOTYPES 1
-#include <SDL2/SDL_opengles2.h>
-
 #include <switch.h>
+#include <SDL2/SDL.h>
 
 extern "C" {
 #include "../config.h"
 #include "yabause.h"
 #include "vdp2.h"
 #include "scsp.h"
-#include "vidsoft.h"
 #include "vidogl.h"
 #include "peripheral.h"
-#include "persdljoy.h"
 #include "m68kcore.h"
 #include "sh2core.h"
 #include "sh2int.h"
 #include "cdbase.h"
+#include "cs0.h"
 #include "cs2.h"
 #include "debug.h"
-#include "sndal.h"
 #include "sndsdl.h"
 #include "osdcore.h"
 #include "ygl.h"
-//#include "libpng12/png.h"
+#include "yui.h"
+#include "threads.h"
+#include "memory.h"
 }
+
+#include <EGL/eglext.h>
+
+#include "config.h"
+#include "input.h"
+#include "DolphinSwitch/Launcher.h"
+#include "sh2_dynarec_devmiyax/dynarec_jit_nx.h"
+
+// Must match sh2_dynarec_devmiyax/DynarecSh2CInterface.cpp
+#define SH2CORE_DYNAMIC 3
 
 static EGLDisplay s_display;
 static EGLContext s_context;
 static EGLSurface s_surface;
 
-//#include "InputManager.h"
-//#include "MenuScreen.h"
-#define ENABLE_NXLINK
-#ifndef ENABLE_NXLINK
-#define TRACE(fmt,...) ((void)0)
-#else
-#include <unistd.h>
-#define TRACE(fmt,...) printf("%s: " fmt "\n", __PRETTY_FUNCTION__, ## __VA_ARGS__)
-static int s_nxlinkSock = -1;
+static char biospath[512];
+static char cdpath[512];
+static char buppath[512];
+static char mpegpath[512] = "";
+static char cartpath[512] = "";
+static std::string shader_cache_path;
 
-static void initNxLink()
-{
-	if (R_FAILED(socketInitializeDefault()))
-		return;
+static nx::Settings s_settings;
+static nx::Input s_input;
 
-	s_nxlinkSock = nxlinkStdio();
-	if (s_nxlinkSock >= 0)
-		TRACE("printf output now goes to nxlink server");
-	else
-		socketExit();
-}
-
-static void deinitNxLink()
-{
-	if (s_nxlinkSock >= 0)
-	{
-		close(s_nxlinkSock);
-		socketExit();
-		s_nxlinkSock = -1;
-	}
-}
+//////////////////////////////////////////////////////////////////////////////
+// Core lists and UI callbacks the emulator core expects from a port
 
 extern "C" {
-
-void userAppInit()
-{
-	initNxLink();
-}
-
-void userAppExit()
-{
-	deinitNxLink();
-}
-}
-
-#endif
-
-extern "C" {
-static char biospath[256] = "./yabasanshiro/bios.bin";
-static char cdpath[256] = "./yabasanshiro/nights.cue";
-//static char cdpath[256] = "/home/pigaming/RetroPie/roms/saturn/gd.cue";
-//static char cdpath[256] = "/home/pigaming/RetroPie/roms/saturn/Virtua Fighter Kids (1996)(Sega)(JP).ccd";
-static char buppath[256] = "./back.bin";
-static char mpegpath[256] = "\0";
-static char cartpath[256] = "\0";
-
-#define LOG
 
 M68K_struct * M68KCoreList[] = {
   &M68KDummy,
-  #ifdef HAVE_C68K
-  &M68KC68K,
-  #endif
-  #ifdef HAVE_Q68
-  &M68KQ68,
-  #endif
 #ifdef HAVE_MUSASHI
   &M68KMusashi,
 #endif
@@ -138,9 +94,6 @@ M68K_struct * M68KCoreList[] = {
 SH2Interface_struct *SH2CoreList[] = {
   &SH2Interpreter,
   &SH2DebugInterpreter,
-#ifdef SH2_DYNAREC
-  &SH2Dynarec,
-#endif
 #if DYNAREC_DEVMIYAX
   &SH2Dyn,
   &SH2DynDebug,
@@ -150,7 +103,6 @@ SH2Interface_struct *SH2CoreList[] = {
 
 PerInterface_struct *PERCoreList[] = {
   &PERDummy,
-  &PERSDLJoy,
   NULL
 };
 
@@ -174,704 +126,645 @@ VideoInterface_struct *VIDCoreList[] = {
   NULL
 };
 
-
-#ifdef YAB_PORT_OSD
-#include "nanovg/nanovg_osdcore.h"
 OSD_struct *OSDCoreList[] = {
-  &OSDNnovg,
   &OSDDummy,
   NULL
 };
-#endif
 
+PFNGLTEXTUREBARRIERNVPROC nx_glTextureBarrierNV = NULL;
 
-static SDL_Window* wnd;
-static SDL_GLContext glc;
-int g_EnagleFPS = 1;
-int g_resolution_mode = 0;
-int g_keep_aspect_rate = 0;
-int g_scsp_sync = 1;
-int g_frame_skip = 0;
-int g_emulated_bios = 0;
-//InputManager* inputmng;
-//MenuScreen * menu;
-
-using std::string;
-string g_keymap_filename;
-
-#include "nanovg.h"
-
-//----------------------------------------------------------------------------------------------
-NVGcontext * getGlobalNanoVGContext(){
-  return NULL;
-}
-
-void DrawDebugInfo()
-{
-}
+void * getGlobalNanoVGContext() { return NULL; }
+void DrawDebugInfo() {}
 
 void YuiErrorMsg(const char *string)
 {
-  LOG("%s",string);
+  printf("YuiErrorMsg: %s\n", string);
 }
 
 void YuiSwapBuffers(void)
 {
   eglSwapBuffers(s_display, s_surface);
-  SetOSDToggle(g_EnagleFPS);
 }
 
-//void YuiSwapBuffers(void)
-//{
-//  SDL_GL_SwapWindow(wnd);
-//  SetOSDToggle(g_EnagleFPS);
-//}
-
-int YuiRevokeOGLOnThisThread(){
-  LOG("revoke thread\n");
-  //SDL_GL_MakeCurrent(wnd,nullptr);
+int YuiRevokeOGLOnThisThread()
+{
   eglMakeCurrent(s_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
   return 0;
 }
 
-int YuiUseOGLOnThisThread(){
-  LOG("use thread\n");
-  //SDL_GL_MakeCurrent(wnd,glc);
-  eglMakeCurrent(s_display, s_surface, s_surface, s_context);
+int YuiUseOGLOnThisThread()
+{
+  if (!eglMakeCurrent(s_display, s_surface, s_surface, s_context)) {
+    printf("YuiUseOGLOnThisThread: eglMakeCurrent failed: 0x%x\n", eglGetError());
+    return -1;
+  }
   return 0;
 }
 
+const char * YuiGetShaderCachePath()
+{
+  return shader_cache_path.c_str();
 }
 
-int saveScreenshot( const char * filename );
+// Hooks for PlayRecorder (input recording/playback)
+static bool s_use_bios = false;
+static int yabauseinit(bool use_bios);
 
-int padmode = 0;
+// Like the other ports, this reports whether the *emulated* BIOS is in use
+int YabauseThread_IsUseBios() { return s_use_bios ? 0 : 1; }
+const char * YabauseThread_getBackupPath() { return buppath; }
+void YabauseThread_setUseBios(int use) {}
+void YabauseThread_setBackupPath(const char * buf) { snprintf(buppath, sizeof(buppath), "%s", buf); }
+void YabauseThread_resetPlaymode() {}
 
-int yabauseinit()
+void YabauseThread_coldBoot()
 {
-  int res;
+  YabauseDeInit();
+  yabauseinit(s_use_bios);
+  YabauseReset();
+}
+
+} // extern "C"
+
+//////////////////////////////////////////////////////////////////////////////
+// Logging: nxlink when a host is listening, otherwise a file on the SD card
+
+static int s_nxlink_sock = -1;
+static FILE * s_logfile = NULL;
+
+extern "C" void userAppInit()
+{
+  if (R_SUCCEEDED(socketInitializeDefault())) {
+    s_nxlink_sock = nxlinkStdio();
+    if (s_nxlink_sock < 0) socketExit();
+  }
+}
+
+extern "C" void userAppExit()
+{
+  if (s_nxlink_sock >= 0) {
+    close(s_nxlink_sock);
+    socketExit();
+    s_nxlink_sock = -1;
+  }
+}
+
+static void initLog()
+{
+  if (s_nxlink_sock >= 0) return;
+  // Leaving a game relaunches the app, so keep the previous run's log too
+  const std::string log = nx::dataPath("log.txt");
+  const std::string previous = nx::dataPath("log.prev.txt");
+  remove(previous.c_str());
+  rename(log.c_str(), previous.c_str());
+  s_logfile = freopen(log.c_str(), "w", stdout);
+  if (s_logfile) {
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    dup2(fileno(stdout), fileno(stderr));
+  }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// EGL: desktop OpenGL 4.3 core on Mesa/nouveau
+
+static bool initEgl(NWindow* win)
+{
+  s_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+  if (!s_display) {
+    printf("eglGetDisplay failed: 0x%x\n", eglGetError());
+    return false;
+  }
+
+  eglInitialize(s_display, NULL, NULL);
+
+  if (!eglBindAPI(EGL_OPENGL_API)) {
+    printf("eglBindAPI(EGL_OPENGL_API) failed: 0x%x\n", eglGetError());
+    goto fail_display;
+  }
+
+  {
+    EGLConfig config;
+    EGLint numConfigs = 0;
+    static const EGLint framebufferAttributeList[] = {
+      EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+      EGL_RED_SIZE,     8,
+      EGL_GREEN_SIZE,   8,
+      EGL_BLUE_SIZE,    8,
+      EGL_ALPHA_SIZE,   8,
+      EGL_DEPTH_SIZE,   24,
+      EGL_STENCIL_SIZE, 8,
+      EGL_NONE
+    };
+    eglChooseConfig(s_display, framebufferAttributeList, &config, 1, &numConfigs);
+    if (numConfigs == 0) {
+      printf("eglChooseConfig: no config found: 0x%x\n", eglGetError());
+      goto fail_display;
+    }
+
+    s_surface = eglCreateWindowSurface(s_display, config, win, NULL);
+    if (!s_surface) {
+      printf("eglCreateWindowSurface failed: 0x%x\n", eglGetError());
+      goto fail_display;
+    }
+
+    static const EGLint contextAttributeList[] = {
+      EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
+      EGL_CONTEXT_MAJOR_VERSION_KHR, 4,
+      EGL_CONTEXT_MINOR_VERSION_KHR, 3,
+      EGL_NONE
+    };
+    s_context = eglCreateContext(s_display, config, EGL_NO_CONTEXT, contextAttributeList);
+    if (!s_context) {
+      printf("eglCreateContext failed: 0x%x\n", eglGetError());
+      goto fail_surface;
+    }
+  }
+
+  eglMakeCurrent(s_display, s_surface, s_surface, s_context);
+  eglSwapInterval(s_display, s_settings.vsync ? 1 : 0);
+  return true;
+
+fail_surface:
+  eglDestroySurface(s_display, s_surface);
+  s_surface = NULL;
+fail_display:
+  eglTerminate(s_display);
+  s_display = NULL;
+  return false;
+}
+
+// GL errors go to the log; capped per game so a per-frame error can't flood it
+static int s_gl_log_count = 0;
+
+static void GLAPIENTRY glDebugLog(GLenum source, GLenum type, GLuint id, GLenum severity,
+                                  GLsizei length, const GLchar * message, const void * user)
+{
+  // Performance hints (e.g. updating a GL_STATIC_DRAW buffer) are just noise here
+  if (severity == GL_DEBUG_SEVERITY_NOTIFICATION || type == GL_DEBUG_TYPE_PERFORMANCE) return;
+  if (s_gl_log_count >= 100) return;
+  if (++s_gl_log_count == 100) printf("GL: further messages suppressed\n");
+  printf("GL: type 0x%x id %u: %s\n", type, id, message);
+}
+
+static void deinitEgl()
+{
+  if (!s_display) return;
+
+  eglMakeCurrent(s_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+  if (s_context) {
+    eglDestroyContext(s_display, s_context);
+    s_context = NULL;
+  }
+  if (s_surface) {
+    eglDestroySurface(s_display, s_surface);
+    s_surface = NULL;
+  }
+  eglTerminate(s_display);
+  s_display = NULL;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+static bool fileExists(const std::string & path)
+{
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static int yabauseinit(bool use_bios)
+{
   yabauseinit_struct yinit = {};
 
   yinit.m68kcoretype = M68KCORE_MUSASHI;
   yinit.percoretype = PERCORE_DUMMY;
-#ifdef SH2_DYNAREC
-    yinit.sh2coretype = 2;
-#else
-  //yinit.sh2coretype = 0;
-#endif
-  yinit.sh2coretype = SH2CORE_INTERPRETER;
-  //yinit.vidcoretype = VIDCORE_SOFT;
+  yinit.sh2coretype = s_settings.dynarec ? SH2CORE_DYNAMIC : SH2CORE_INTERPRETER;
   yinit.vidcoretype = VIDCORE_OGL;
+#ifdef HAVE_LIBSDL
+  yinit.sndcoretype = SNDCORE_SDL;
+#else
   yinit.sndcoretype = SNDCORE_DUMMY;
-  //yinit.sndcoretype = SNDCORE_DUMMY;
-  //yinit.cdcoretype = CDCORE_DEFAULT;
+#endif
   yinit.cdcoretype = CDCORE_ISO;
-  yinit.carttype = CART_NONE;
+  yinit.carttype = s_settings.cart;
   yinit.regionid = 0;
-  if( g_emulated_bios ){
-    yinit.biospath = NULL;
-  }else{
-    yinit.biospath = biospath;
-  }
+  yinit.biospath = use_bios ? biospath : NULL;
   yinit.cdpath = cdpath;
   yinit.buppath = buppath;
   yinit.mpegpath = mpegpath;
   yinit.cartpath = cartpath;
   yinit.videoformattype = VIDEOFORMATTYPE_NTSC;
-  yinit.frameskip = g_frame_skip;
+  yinit.frameskip = s_settings.frameskip;
+  yinit.framelimit = s_settings.framelimit;
   yinit.usethreads = 0;
-  yinit.skip_load = 0;    
+  yinit.skip_load = 0;
   yinit.video_filter_type = 0;
-  yinit.polygon_generation_mode = PERSPECTIVE_CORRECTION; ////GPU_TESSERATION;
+  yinit.polygon_generation_mode = s_settings.polygon_mode;
   yinit.use_new_scsp = 1;
-  yinit.resolution_mode = g_resolution_mode;
+  yinit.resolution_mode = s_settings.resolution_mode;
+  yinit.rbg_resolution_mode = s_settings.rbg_resolution_mode;
+  yinit.rbg_use_compute_shader = s_settings.rbg_compute_shader;
   yinit.rotate_screen = 0;
-  yinit.scsp_sync_count_per_frame = g_scsp_sync;
-  yinit.extend_backup = 0;
-  yinit.scsp_main_mode = 1;
+  yinit.scsp_sync_count_per_frame = s_settings.scsp_sync_per_frame;
+  yinit.extend_backup = 1;
+  yinit.scsp_main_mode = s_settings.scsp_main_mode;
+  yinit.use_cpu_affinity = 1;
+  yinit.use_sh2_cache = s_settings.sh2_cache;
 
-  res = YabauseInit(&yinit);
-  if( res == -1) {
+  Vdp2SyncVBlankOut = s_settings.sync_render;
+  if (YabauseInit(&yinit) == -1)
     return -1;
-  }
 
-  //padmode = inputmng->getCurrentPadMode( 0 );
   OSDInit(0);
-  OSDChangeCore(OSDCORE_NANOVG);
-  LogStart();
-  //LogChangeOutput(DEBUG_CALLBACK, NULL);
+  OSDChangeCore(OSDCORE_DUMMY);
   return 0;
 }
 
-static bool initEgl(NWindow* win)
+extern "C" u64 getM68KCounter();
+extern "C" u32 YabThreadGetNxHandle(unsigned int id);
+extern "C" char _start[];   // entry point, at offset 0 of our code (libnx crt0)
+
+static std::atomic<u32> s_frames_done{0};
+static std::atomic<bool> s_watchdog_running{true};
+static Handle s_main_thread;
+
+// What the app is doing, for the hang watchdog
+enum class Phase { Launcher, Game, GameTeardown };
+static std::atomic<Phase> s_phase{Phase::Launcher};
+// Bumped by every launcher frame, launcher step and emulated frame
+static std::atomic<u32> s_progress{0};
+
+void NxLauncherHeartbeat()
 {
-    // Connect to the EGL default display
-    s_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (!s_display)
-    {
-        TRACE("Could not connect to display! error: %d", eglGetError());
-        goto _fail0;
-    }
+  s_progress++;
+}
 
-    // Initialize the EGL display connection
-    eglInitialize(s_display, NULL, NULL);
+void NxLauncherStep(const char * step)
+{
+  printf("Launcher: %s\n", step);
+  s_progress++;
+}
 
-    // Get an appropriate EGL framebuffer configuration
-    EGLConfig config;
-    EGLint numConfigs;
-    static const EGLint framebufferAttributeList[] =
-    {
-        EGL_RED_SIZE,     8,
-        EGL_GREEN_SIZE,   8,
-        EGL_BLUE_SIZE,    8,
-        EGL_ALPHA_SIZE,   8,
-        EGL_DEPTH_SIZE,   24,
-        EGL_STENCIL_SIZE, 8,
-        EGL_NONE
-    };
-    eglChooseConfig(s_display, framebufferAttributeList, &config, 1, &numConfigs);
-    if (numConfigs == 0)
-    {
-        TRACE("No config found! error: %d", eglGetError());
-        goto _fail1;
-    }
-
-    // Create an EGL window surface
-    s_surface = eglCreateWindowSurface(s_display, config, win, NULL);
-    if (!s_surface)
-    {
-        TRACE("Surface creation failed! error: %d", eglGetError());
-        goto _fail1;
-    }
-
-    // Create an EGL rendering context
-    static const EGLint contextAttributeList[] =
-    {
-        EGL_CONTEXT_CLIENT_VERSION, 3, // request OpenGL ES 2.x
-        EGL_NONE
-    };
-    s_context = eglCreateContext(s_display, config, EGL_NO_CONTEXT, contextAttributeList);
-    if (!s_context)
-    {
-        TRACE("Context creation failed! error: %d", eglGetError());
-        goto _fail2;
-    }
-
-    // Connect the context to the surface
-    eglMakeCurrent(s_display, s_surface, s_surface, s_context);
-    return true;
-
-_fail2:
-    eglDestroySurface(s_display, s_surface);
-    s_surface = NULL;
-_fail1:
-    eglTerminate(s_display);
-    s_display = NULL;
-_fail0:
+static bool readableAddress(u64 address)
+{
+  MemoryInfo info;
+  u32 page;
+  if (R_FAILED(svcQueryMemory(&info, &page, address)))
     return false;
+  return info.type != MemType_Unmapped && (info.perm & Perm_R) &&
+         address + 16 <= info.addr + info.size;
 }
 
-static void deinitEgl()
+static void printAddress(const char * label, u64 address)
 {
-    if (s_display)
-    {
-        eglMakeCurrent(s_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        if (s_context)
-        {
-            eglDestroyContext(s_display, s_context);
-            s_context = NULL;
-        }
-        if (s_surface)
-        {
-            eglDestroySurface(s_display, s_surface);
-            s_surface = NULL;
-        }
-        eglTerminate(s_display);
-        s_display = NULL;
-    }
+  const u64 base = (u64)_start;
+  if (address >= base && address < base + 0x4000000)
+    printf("%self+0x%llx", label, (unsigned long long)(address - base));
+  else
+    printf("%s0x%llx", label, (unsigned long long)address);
 }
 
+// Pauses a thread just long enough to read where it is, including the call
+// stack from its frame-pointer chain. Addresses inside our code are logged
+// relative to _start so they can be looked up in yabasanshiro.elf
+// (aarch64-none-elf-addr2line -f -e yabasanshiro.elf 0x...).
+static void sampleThread(const char * name, Handle h)
+{
+  ThreadContext ctx;
+  Result rc;
+
+  if (h == INVALID_HANDLE) return;
+  rc = svcSetThreadActivity(h, ThreadActivity_Paused);
+  if (R_FAILED(rc)) {
+    printf("  %-5s pause failed 0x%x\n", name, rc);
+    return;
+  }
+  rc = svcGetThreadContext3(&ctx, h);
+  if (R_FAILED(rc)) {
+    svcSetThreadActivity(h, ThreadActivity_Runnable);
+    printf("  %-5s context failed 0x%x\n", name, rc);
+    return;
+  }
+
+  printf("  %-5s", name);
+  printAddress(" pc ", ctx.pc.x);
+  printAddress("  lr ", ctx.lr);
+  printf("\n        stack:");
+  // AArch64 frame records: [fp] = caller's fp, [fp + 8] = return address
+  u64 fp = ctx.fp;
+  for (int depth = 0; depth < 16 && fp && (fp & 7) == 0 && readableAddress(fp); depth++) {
+    const u64 * frame = (const u64 *)fp;
+    printAddress(" ", frame[1]);
+    if (frame[0] <= fp) break;
+    fp = frame[0];
+  }
+  printf("\n");
+  svcSetThreadActivity(h, ThreadActivity_Runnable);
+}
+
+static void sampleAllThreads()
+{
+  // A few samples show whether a thread is parked or looping
+  for (int i = 0; i < 3; i++) {
+    printf(" sample %d:\n", i);
+    sampleThread("main", s_main_thread);
+    sampleThread("vdp", YabThreadGetNxHandle(YAB_THREAD_VDP));
+    sampleThread("scsp", YabThreadGetNxHandle(YAB_THREAD_SCSP));
+    svcSleepThread(50000000LL);
+  }
+}
+
+// Logs where the app is when it stops making progress, for diagnosing hangs:
+// launcher frames or steps stopping for 5s, or emulated frames for 3s. If game
+// teardown hangs it also ends the process, so the user isn't left stuck (save
+// RAM is flushed before teardown starts).
+static void watchdogMain(void *)
+{
+  u32 last = 0;
+  Phase last_phase = Phase::Launcher;
+  int stalled_secs = 0;
+  bool reported = false;
+  while (s_watchdog_running) {
+    svcSleepThread(1000000000LL);
+
+    const Phase phase = s_phase;
+    const u32 now = s_progress;
+    if (now != last || phase != last_phase) {
+      last = now;
+      last_phase = phase;
+      stalled_secs = 0;
+      reported = false;
+      continue;
+    }
+    stalled_secs++;
+
+    if (phase == Phase::GameTeardown) {
+      if (stalled_secs < 3) continue;
+      printf("watchdog: game teardown stuck for 3s\n");
+      sampleAllThreads();
+      printf("watchdog: forcing exit\n");
+      fflush(stdout);
+      svcExitProcess();
+    }
+
+    if (reported) continue;
+    if (phase == Phase::Game && stalled_secs >= 3) {
+      reported = true;
+      printf("watchdog: no frame for 3s at frame %u, line %d/%d (vblank %d), m68k counter %llu\n",
+        (u32)s_frames_done, yabsys.LineCount, yabsys.MaxLineCount, yabsys.VBlankLineCount,
+        (unsigned long long)(getM68KCounter() >> SCSP_FRACTIONAL_BITS));
+      if (SH2Core && MSH2 && SSH2)
+        printf("  SH2 master pc %08X, slave pc %08X (slave running %d)\n",
+          SH2Core->GetPC(MSH2), SH2Core->GetPC(SSH2), yabsys.IsSSH2Running);
+      sampleAllThreads();
+    } else if (phase == Phase::Launcher && stalled_secs >= 5) {
+      reported = true;
+      printf("watchdog: launcher made no progress for 5s\n");
+      for (int i = 0; i < 3; i++) {
+        sampleThread("main", s_main_thread);
+        svcSleepThread(50000000LL);
+      }
+    }
+  }
+}
+
+// Resize touches GL, and with async rendering the VDP thread owns the
+// context, so borrow it for the duration.
+static void resizeVideo(int width, int height)
+{
+  VdpRevoke();
+  YuiUseOGLOnThisThread();
+  VIDCore->Resize(0, 0, width, height, 1, s_settings.aspect_mode);
+  YuiRevokeOGLOnThisThread();
+  VdpResume();
+}
+
+// Without a real BIOS the core falls back to its high-level emulated one
+static bool findBios()
+{
+  for (const char * name : { "bios.bin", "saturn_bios.bin", "sega_101.bin", "mpr-17933.bin" }) {
+    std::string path = nx::dataPath(name);
+    if (fileExists(path)) {
+      snprintf(biospath, sizeof(biospath), "%s", path.c_str());
+      return true;
+    }
+  }
+  return false;
+}
+
+enum class SessionEnd {
+  BackToLauncher,  // the player quit the game (MINUS + PLUS)
+  ExitApp,         // the system asked the app to close, or the game couldn't start
+};
+
+// Runs one game until the player quits it, then tears the emulator down again so the
+// launcher can take over the screen.
+static SessionEnd runGame(const std::string & game)
+{
+  snprintf(cdpath, sizeof(cdpath), "%s", game.c_str());
+  printf("Game: %s\n", cdpath);
+
+  // Settings may have changed in the launcher since the last game
+  s_settings = nx::loadSettings();
+  if (s_settings.dynarec && !DynaJitAvailable()) {
+    printf("JIT unavailable, falling back to the SH2 interpreter\n");
+    s_settings.dynarec = false;
+  }
+
+  s_use_bios = findBios();
+  printf("BIOS: %s\n", s_use_bios ? biospath : "(emulated)");
+
+  // The launcher's SDL window released the default window's buffers on shutdown, which
+  // also clears its dimensions; without this the EGL surface would be 0x0.
+  NWindow * window = nwindowGetDefault();
+  const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
+  const u32 window_width = docked ? 1920 : 1280;
+  const u32 window_height = docked ? 1080 : 720;
+  if (!nwindowIsValid(window) || R_FAILED(nwindowSetDimensions(window, window_width, window_height)) ||
+      R_FAILED(nwindowSetCrop(window, 0, 0, window_width, window_height))) {
+    printf("Could not configure the display window\n");
+    return SessionEnd::ExitApp;
+  }
+
+  if (!initEgl(window))
+    return SessionEnd::ExitApp;
+
+  if (!gladLoadGL()) {
+    printf("gladLoadGL failed\n");
+    deinitEgl();
+    return SessionEnd::ExitApp;
+  }
+  nx_glTextureBarrierNV = (PFNGLTEXTUREBARRIERNVPROC)eglGetProcAddress("glTextureBarrierNV");
+  if (!nx_glTextureBarrierNV)
+    nx_glTextureBarrierNV = (PFNGLTEXTUREBARRIERNVPROC)eglGetProcAddress("glTextureBarrier");
+  printf("GL_RENDERER: %s\n", glGetString(GL_RENDERER));
+  printf("GL_VERSION: %s\n", glGetString(GL_VERSION));
+  printf("GL_TextureBarrier: %s\n", nx_glTextureBarrierNV ? "yes" : "no");
+
+  // Each game gets a fresh context
+  nx_glShimReset();
+  s_gl_log_count = 0;
+  glEnable(GL_DEBUG_OUTPUT);
+  glDebugMessageCallback(glDebugLog, NULL);
+
+  // The launcher's window may have left the display at a different size (1080p docked)
+  EGLint width = 0, height = 0;
+  if (!eglQuerySurface(s_display, s_surface, EGL_WIDTH, &width) ||
+      !eglQuerySurface(s_display, s_surface, EGL_HEIGHT, &height) || width <= 0 || height <= 0) {
+    width = window_width;
+    height = window_height;
+  }
+  printf("Display: %dx%d (%s)\n", width, height, docked ? "docked" : "handheld");
+
+  if (yabauseinit(s_use_bios) == -1) {
+    printf("YabauseInit failed\n");
+    deinitEgl();
+    return SessionEnd::ExitApp;
+  }
+  printf("SH2 core: %s, frame skip %s, sound sync %d\n", SH2Core ? SH2Core->Name : "(none)",
+    s_settings.frameskip ? "on" : "off", s_settings.scsp_main_mode);
+  printf("vsync %s, sync_render %s\n", s_settings.vsync ? "on" : "off", s_settings.sync_render ? "on" : "off");
+
+  // After YabauseInit, which resets the controller ports
+  s_input.init();
+
+  resizeVideo(width, height);
+
+  s_frames_done = 0;
+  s_phase = Phase::Game;
+
+  u64 stats_start = armGetSystemTick();
+  int stats_frames = 0;
+  SessionEnd end = SessionEnd::ExitApp;
+
+  while (appletMainLoop()) {
+    s_input.update();
+
+    // Hold MINUS + PLUS to leave the game
+    u64 held = s_input.held(0);
+    if ((held & HidNpadButton_Minus) && (held & HidNpadButton_Plus)) {
+      end = SessionEnd::BackToLauncher;
+      break;
+    }
+
+    YabauseExec(); // one frame
+    s_frames_done++;
+    s_progress++;
+
+    // Persist save RAM changes every couple of seconds
+    if (s_frames_done % 120 == 0)
+      YabMemMapFlush();
+
+    // Emulation speed and disc status in the log every few seconds
+    stats_frames++;
+    u64 elapsed_ns = armTicksToNs(armGetSystemTick() - stats_start);
+    if (elapsed_ns >= 5000000000ULL) {
+      printf("frames/s %.1f, game code '%s'\n",
+        stats_frames * 1e9 / (double)elapsed_ns, Cs2GetCurrentGmaecode());
+      stats_frames = 0;
+      stats_start = armGetSystemTick();
+    }
+  }
+
+  // Saves first, so nothing is lost if teardown goes wrong
+  printf("Stopping game\n");
+  YabMemMapFlush();
+  s_phase = Phase::GameTeardown;
+
+  // The render thread owns the GL context and would exit still holding it,
+  // which leaves Mesa unable to free the context: EGL teardown then waits
+  // forever for the GPU driver to return its memory. Take it back first, so
+  // the video core's own cleanup also runs with a current context.
+  printf("Taking back GL context\n");
+  VdpRevoke();
+  YuiUseOGLOnThisThread();
+  glFinish();
+
+  printf("YabauseDeInit\n");
+  YabauseDeInit();
+  printf("deinitEgl\n");
+  deinitEgl();
+  // The sound core initialises SDL audio but doesn't release it
+  SDL_QuitSubSystem(SDL_INIT_AUDIO);
+
+  s_phase = Phase::Launcher;
+  printf("Game stopped\n");
+  return end;
+}
 
 int main(int argc, char** argv)
 {
-  //inputmng = InputManager::getInstance();
+  nx::ensureDataDirs();
+  initLog();
+  nx::migrateOldDataDir();
+  printf("YabaSanshiro NX %s (%s)\n", YAB_VERSION, GIT_SHA1);
 
-  std::string bckup_dir = "./backup.bin";
-  strcpy( buppath, bckup_dir.c_str() );
+  shader_cache_path = nx::dataPath("cache/");
+  snprintf(buppath, sizeof(buppath), "%s", nx::dataPath("backup.bin").c_str());
 
-#if 0  
-  printf("\033[2J");
+  // The launcher's translations and artwork
+  const bool romfs = R_SUCCEEDED(romfsInit());
+  if (!romfs)
+    printf("romfsInit failed\n");
 
-  // Inisialize home directory
-  std::string home_dir = getenv("HOME");
-  home_dir += "/.yabasanshiro/";
-  struct stat st = {0};
-  if (stat(home_dir.c_str(), &st) == -1) {
-    mkdir(home_dir.c_str(), 0700);
-  }  
-  std::string bckup_dir = home_dir + "backup.bin";
-  strcpy( buppath, bckup_dir.c_str() );
+  // Higher priority than the emulator threads so a spinning thread can't starve it
+  s_main_thread = threadGetCurHandle();
+  Thread watchdog;
+  const bool watchdog_started =
+    R_SUCCEEDED(threadCreate(&watchdog, watchdogMain, NULL, NULL, 0x4000, 0x20, -2)) &&
+    R_SUCCEEDED(threadStart(&watchdog));
 
-  g_keymap_filename = home_dir + "keymapv2.json";
+  // Where hbloader should start us again when a game is left
+  const std::string self_path = argc > 0 && argv[0] && argv[0][0] ? argv[0] : NX_DATA_DIR "/yabasanshiro.nro";
 
-  std::string current_exec_name = argv[0]; // Name of the current exec program
-  std::vector<std::string> all_args;
-  if (argc > 1) {
-    all_args.assign(argv + 1, argv + argc);
-    if( all_args[0] == "-h" || all_args[0] == "--h" ){
-      printf("Usage:\n");
-      printf("  -b STRING  --bios STRING                 bios file\n");
-      printf("  -i STRING  --iso STRING                  iso/cue file\n");
-      printf("  -r NUMBER  --resolution_mode NUMBER      0 .. Native, 1 .. 4x, 2 .. 2x, 3 .. Original\n");
-      printf("  -a         --keep_aspect_rate\n");
-      printf("  -s NUMBER  --scps_sync_per_frame NUMBER\n");
-      printf("  -nf         --no_frame_skip              disable frame skip\n");    
-      printf("  -v         --version\n");    
-      exit(0);
+  // One game per process: running a second game after the first in the same process isn't
+  // reliable (the launcher's SDL video and the emulator's EGL keep taking the display window
+  // from each other, and emulator state carries over), so leaving a game restarts the app.
+  std::string game;
+  if (argc > 1 && fileExists(argv[1])) {
+    // A game passed on the command line (nxlink -a, forwarders) boots straight away
+    game = argv[1];
+  } else {
+    std::string startup_message;
+    while (appletMainLoop()) {
+      std::optional<DolphinSwitch::LaunchRequest> request =
+        DolphinSwitch::RunLauncher(startup_message, self_path);
+      printf("Launcher closed%s\n", request ? "" : " (no game chosen)");
+      startup_message.clear();
+      if (!request)
+        break;
+      if (!fileExists(request->path)) {
+        startup_message = "The game file could not be found: " + request->path;
+        continue;
+      }
+      game = request->path;
+      break;
     }
   }
 
-  for( int i=0; i<all_args.size(); i++ ){
-    string x = all_args[i];
-		if(( x == "-b" || x == "--bios") && (i+1<all_args.size() ) ) {
-      g_emulated_bios = 0;
-      strncpy(biospath, all_args[i+1].c_str(), 256);
-    }
-		else if(( x == "-i" || x == "--iso") && (i+1<all_args.size() ) ) {
-      strncpy(cdpath, all_args[i+1].c_str(), 256);
-    }
-		else if(( x == "-r" || x == "--resolution_mode") && (i+1<all_args.size() ) ) {
-      g_resolution_mode = std::stoi( all_args[i+1] );
-    }
-		else if(( x == "-a" || x == "--keep_aspect_rate") ) {
-      g_keep_aspect_rate = 1;
-    }
-		else if(( x == "-s" || x == "--g_scsp_sync")&& (i+1<all_args.size() ) ) {
-      g_scsp_sync = std::stoi( all_args[i+1] );
-    }
-		else if(( x == "-nf" || x == "--no_frame_skip") ) {
-      g_frame_skip = 0;
-    }
-		else if(( x == "-v" || x == "--version") ) {
-      printf("YabaSanshiro version %s(%s)\n",YAB_VERSION, GIT_SHA1 );
-      return 0;
-    }
-	}
-#endif
-  if (!initEgl(nwindowGetDefault()))
-      return EXIT_FAILURE;
-
-  printf("context renderer string: \"%s\"\n", glGetString(GL_RENDERER));
-  printf("context vendor string: \"%s\"\n", glGetString(GL_VENDOR));
-  printf("version string: \"%s\"\n", glGetString(GL_VERSION));
-  printf("Extentions: %s\n",glGetString(GL_EXTENSIONS));
-
-  if( yabauseinit() == -1 ) {
-      printf("Fail to yabauseinit Bye! (%s)", SDL_GetError() );
-      return -1;
-  }
-
-  int width = 1280;
-  int height = 720;
-  VIDCore->Resize(0,0,width,height,0);
-  glViewport(0,0,width,height);
-  glClearColor( 0.0f, 0.0f,0.0f,1.0f);
-  glClear( GL_COLOR_BUFFER_BIT );
-
-#if 0
-  inputmng->init(g_keymap_filename);
-  menu = new MenuScreen(wnd,width,height, g_keymap_filename);
-  menu->setConfigFile(g_keymap_filename);  
-
-
-  if( g_keep_aspect_rate ){
-    int originx = 0;
-    int originy = 0;
-    int specw = width;
-    int spech = height;
-    float specratio = (float)specw / (float)spech;
-    int saturnw = 4;
-    int saturnh = 3;
-    float saturnraito = (float)saturnw/ (float)saturnh;
-    float revraito = (float) saturnh/ (float)saturnw;
-    if( specratio > saturnraito ){
-            width = spech * saturnraito;
-            height = spech;
-            originx = (dsp.w - width)/2.0;
-            originy = 0;
-    }else{
-        width = specw ;
-        height = specw * revraito;
-        originx = 0;
-        originy = spech - height;
-    }
-    VIDCore->Resize(originx,originy,width,height,0);
-  }else{
-    VIDCore->Resize(0,0,width,height,0);
-  }
-  SDL_GL_MakeCurrent(wnd,nullptr);
-  YabThreadSetCurrentThreadAffinityMask(0x00);
-
-  Uint32 evToggleMenu = SDL_RegisterEvents(1);
-  inputmng->setToggleMenuEventCode(evToggleMenu);
-
-  Uint32  evResetMenu = SDL_RegisterEvents(1);
-  menu->setResetMenuEventCode(evResetMenu);
-
-  Uint32  evPadMenu = SDL_RegisterEvents(1);
-  menu->setTogglePadModeMenuEventCode(evPadMenu);
-
-  Uint32  evToggleFps = SDL_RegisterEvents(1);
-  menu->setToggleFpsCode(evToggleFps);
-
-  Uint32  evToggleFrameSkip = SDL_RegisterEvents(1);
-  menu->setToggleFrameSkip(evToggleFrameSkip);
-
-  Uint32  evUpdateConfig = SDL_RegisterEvents(1);
-  menu->setUpdateConfig(evUpdateConfig);
-
-  Uint32  evOpenTray = SDL_RegisterEvents(1);
-  menu->setOpenTrayMenuEventCode(evOpenTray);
-
-  Uint32  evCloseTray = SDL_RegisterEvents(1);
-  menu->setCloseTrayMenuEventCode(evCloseTray);
-
-
-  bool menu_show = false;
-  std::string tmpfilename = home_dir + "tmp.png";
-
-  struct sched_param thread_param;
-  thread_param.sched_priority = 15; //sched_get_priority_max(SCHED_FIFO);
-  if ( pthread_setschedparam(pthread_self(), SCHED_FIFO, &thread_param) < -1 ) {
-    LOG("sched_setscheduler");
-  }
-  setpriority( PRIO_PROCESS, 0, -8);
-  int frame_cont = 0;
-  while(true) {
-    SDL_Event e;
-    while(SDL_PollEvent(&e)) {
-      if(e.type == SDL_QUIT){
-        glClearColor(0.0,0.0,0.0,1.0);
-        glClear(GL_COLOR_BUFFER_BIT);        
-        SDL_GL_SwapWindow(wnd);
-        YabauseDeInit();
-        SDL_Quit();
-        return 0;
-      }
-      else if( e.type == evUpdateConfig ){
-          inputmng->updateConfig();
-      }
-      else if(e.type == evToggleMenu){
-        if( menu_show ){
-          menu_show = false;
-          inputmng->setMenuLayer(nullptr);
-          SDL_GL_MakeCurrent(wnd,nullptr);
-          VdpResume();
-          SNDSDL.UnMuteAudio();          
-        }else{
-          menu_show = true;
-          SNDSDL.MuteAudio();
-          VdpRevoke();
-          inputmng->setMenuLayer(menu);
-          SDL_GL_MakeCurrent(wnd,glc);
-          saveScreenshot(tmpfilename.c_str());
-          glUseProgram(0);
-          glGetError();
-          glBindBuffer(GL_ARRAY_BUFFER, 0);
-          glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
-          glDisableVertexAttribArray(0);
-          glDisableVertexAttribArray(1);
-          glDisableVertexAttribArray(2);
-          glDisable(GL_DEPTH_TEST);
-          glDisable(GL_SCISSOR_TEST);
-          glDisable(GL_STENCIL_TEST);
-          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);   
-          menu->setBackGroundImage( tmpfilename );
-        }
-      }
-
-      else if(e.type == evResetMenu){
-        YabauseReset();
-        menu_show = false;
-        inputmng->setMenuLayer(nullptr);
-        SDL_GL_MakeCurrent(wnd,nullptr);
-        VdpResume();
-        SNDSDL.UnMuteAudio(); 
-      }
-
-      else if(e.type == evPadMenu ){
-        if( padmode == 0 ){
-          padmode = 1;
-        }else{
-          padmode = 0;
-        }
-        inputmng->setGamePadomode( 0, padmode );
-        menu_show = false;
-        inputmng->setMenuLayer(nullptr);
-        SDL_GL_MakeCurrent(wnd,nullptr);
-        VdpResume();
-        SNDSDL.UnMuteAudio();         
-      }
-
-      else if(e.type == evToggleFps ){
-        if( g_EnagleFPS == 0 ){
-          g_EnagleFPS = 1;
-        }else{
-          g_EnagleFPS = 0;
-        }
-        menu_show = false;
-        inputmng->setMenuLayer(nullptr);
-        SDL_GL_MakeCurrent(wnd,nullptr);
-        VdpResume();
-        SNDSDL.UnMuteAudio();         
-      }
-
-      else if(e.type == evToggleFrameSkip ){
-        if( g_frame_skip == 0 ){
-          g_frame_skip = 1;
-          EnableAutoFrameSkip();
-        }else{
-          g_frame_skip = 0;
-          DisableAutoFrameSkip();
-        }
-        menu_show = false;
-        inputmng->setMenuLayer(nullptr);
-        SDL_GL_MakeCurrent(wnd,nullptr);
-        VdpResume();
-        SNDSDL.UnMuteAudio();         
-      }
-      else if(e.type == evOpenTray ){
-        menu->setCurrentGamePath(cdpath);
-        Cs2ForceOpenTray();
-        if( !g_emulated_bios ) {
-        menu_show = false;
-        inputmng->setMenuLayer(nullptr);
-        SDL_GL_MakeCurrent(wnd,nullptr);
-        VdpResume();
-        SNDSDL.UnMuteAudio();         
-      }
-      }
-      else if(e.type == evCloseTray ){
-        if( e.user.data1 != nullptr ){
-          strcpy( cdpath, (const char*)e.user.data1 );
-          free(e.user.data1);
-        }
-        Cs2ForceCloseTray(CDCORE_ISO, cdpath );
-        menu_show = false;
-        inputmng->setMenuLayer(nullptr);
-        SDL_GL_MakeCurrent(wnd,nullptr);
-        VdpResume();
-        SNDSDL.UnMuteAudio();         
-      }
-
-      inputmng->parseEvent(e);
-      if( menu_show ){
-        menu->onEvent( e );
-      }
-    }
-    inputmng->handleJoyEvents();
-
-    if( menu_show ){
-      glClearColor(0.0f, 0.0f, 0.0f, 1);
-      glClear(GL_COLOR_BUFFER_BIT);
-      menu->drawAll();
-      SDL_GL_SwapWindow(wnd);
-    }else{
-      //printf("\033[%d;%dH Frmae = %d \n", 0, 0, frame_cont);
-      //frame_cont++;
-      YabauseExec(); // exec one frame
+  if (!game.empty() && runGame(game) == SessionEnd::BackToLauncher) {
+    // Ask hbloader to start us again once we've exited: back to a fresh launcher. Without
+    // hbloader support this simply returns to the homebrew menu.
+    if (envHasNextLoad()) {
+      const std::string arguments = "\"" + self_path + "\"";
+      Result rc = envSetNextLoad(self_path.c_str(), arguments.c_str());
+      printf("Relaunching %s: 0x%x\n", self_path.c_str(), rc);
+    } else {
+      printf("hbloader can't relaunch; returning to the homebrew menu\n");
     }
   }
-#else
 
-#define MAKE_PAD(a,b) ((a<<24)|(b))
-  void * padbits;
-  PerPortReset();
-  padbits = PerPadAdd(&PORTDATA1);
-
-  PerSetKey(MAKE_PAD(0,PERPAD_UP), PERPAD_UP, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_RIGHT), PERPAD_RIGHT, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_DOWN), PERPAD_DOWN, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_LEFT), PERPAD_LEFT, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_START), PERPAD_START, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_A), PERPAD_A, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_B), PERPAD_B, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_C), PERPAD_C, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_X), PERPAD_X, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_Y), PERPAD_Y, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_Z), PERPAD_Z, padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_RIGHT_TRIGGER),PERPAD_RIGHT_TRIGGER,padbits);
-  PerSetKey(MAKE_PAD(0,PERPAD_LEFT_TRIGGER),PERPAD_LEFT_TRIGGER,padbits);
-
-  while(appletMainLoop()) {
-      // Get and process input
-        hidScanInput();
-        u32 kDown = hidKeysDown(CONTROLLER_P1_AUTO);
-        if ( (kDown & KEY_MINUS) ) 
-            break;
-
-    int player = 0;
-    if (kDown & KEY_B) PerKeyDown(MAKE_PAD(player,PERPAD_A)); else PerKeyUp(MAKE_PAD(player,PERPAD_A));
-    if (kDown & KEY_A) PerKeyDown(MAKE_PAD(player,PERPAD_B)); else PerKeyUp(MAKE_PAD(player,PERPAD_B));
-    if (kDown & KEY_R) PerKeyDown(MAKE_PAD(player,PERPAD_C)); else PerKeyUp(MAKE_PAD(player,PERPAD_C));
-
-    if (kDown & KEY_Y) PerKeyDown(MAKE_PAD(player,PERPAD_X)); else PerKeyUp(MAKE_PAD(player,PERPAD_X));
-    if (kDown & KEY_X) PerKeyDown(MAKE_PAD(player,PERPAD_Y)); else PerKeyUp(MAKE_PAD(player,PERPAD_Y));
-    if (kDown & KEY_L) PerKeyDown(MAKE_PAD(player,PERPAD_Z)); else PerKeyUp(MAKE_PAD(player,PERPAD_Z));
-
-    if (kDown & KEY_DLEFT) PerKeyDown(MAKE_PAD(player,PERPAD_LEFT)); else PerKeyUp(MAKE_PAD(player,PERPAD_LEFT));
-    if (kDown & KEY_DRIGHT) PerKeyDown(MAKE_PAD(player,PERPAD_RIGHT)); else PerKeyUp(MAKE_PAD(player,PERPAD_RIGHT));
-    if (kDown & KEY_DUP) PerKeyDown(MAKE_PAD(player,PERPAD_UP)); else PerKeyUp(MAKE_PAD(player,PERPAD_UP));
-    if (kDown & KEY_DDOWN) PerKeyDown(MAKE_PAD(player,PERPAD_DOWN)); else PerKeyUp(MAKE_PAD(player,PERPAD_DOWN));
-
-    if (kDown & KEY_PLUS) PerKeyDown(MAKE_PAD(player,PERPAD_START)); else PerKeyUp(MAKE_PAD(player,PERPAD_START));
-
-    if (kDown & KEY_ZR) PerKeyDown(MAKE_PAD(player,PERPAD_RIGHT_TRIGGER)); else PerKeyUp(MAKE_PAD(player,PERPAD_RIGHT_TRIGGER));
-    if (kDown & KEY_ZL) PerKeyDown(MAKE_PAD(player,PERPAD_LEFT_TRIGGER)); else PerKeyUp(MAKE_PAD(player,PERPAD_LEFT_TRIGGER));
-
-    //glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
-    //glClear(GL_COLOR_BUFFER_BIT);
-    //eglSwapBuffers(s_display, s_surface);
-    YabauseExec(); // exec one frame
+  DolphinSwitch::ShutdownLauncherStorage();
+  // The dynarec's code buffer lives as long as the app; hbloader aborts if
+  // code memory is still mapped when we return to it
+  DynaJitShutdown();
+  SDL_Quit();
+  if (romfs)
+    romfsExit();
+  s_watchdog_running = false;
+  if (watchdog_started) {
+    threadWaitForExit(&watchdog);
+    threadClose(&watchdog);
   }
-#endif  
-  YabauseDeInit();
-  deinitEgl();
+  printf("Exited cleanly\n");
   return 0;
-}
-
-
-#define YUI_LOG printf
-int saveScreenshot( const char * filename ){
-    
-#if 0    
-    int width;
-    int height;
-    unsigned char * buf = NULL;
-    unsigned char * bufRGB = NULL;
-    png_bytep * row_pointers = NULL;
-    int quality = 100; // best
-    FILE * outfile = NULL;
-    int row_stride;
-    int glerror;
-    int u,v;
-    int pmode;
-    png_byte color_type;
-    png_byte bit_depth; 
-    png_structp png_ptr;
-    png_infop info_ptr;
-    int number_of_passes;
-    int rtn = -1;
-  
-    SDL_GetWindowSize( wnd, &width, &height);
-    buf = (unsigned char *)malloc(width*height*4);
-    if( buf == NULL ) {
-        YUI_LOG("not enough memory\n");
-        goto FINISH;
-    }
-
-    glReadBuffer(GL_BACK);
-    pmode = GL_RGBA;
-    glGetError();
-    glReadPixels(0, 0, width, height, pmode, GL_UNSIGNED_BYTE, buf);
-    if( (glerror = glGetError()) != GL_NO_ERROR ){
-        YUI_LOG("glReadPixels %04X\n",glerror);
-         goto FINISH;
-    }
-	
-	for( u = 3; u <width*height*4; u+=4 ){
-		buf[u]=0xFF;
-	}
-    row_pointers = (png_byte**)malloc(sizeof(png_bytep) * height);
-    for (v=0; v<height; v++)
-        row_pointers[v] = (png_byte*)&buf[ (height-1-v) * width * 4];
-
-    // save as png
-    if ((outfile = fopen(filename, "wb")) == NULL) {
-        YUI_LOG("can't open %s\n", filename);
-        goto FINISH;
-    }
-
-    /* initialize stuff */
-    png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-
-    if (!png_ptr){
-        YUI_LOG("[write_png_file] png_create_write_struct failed");
-        goto FINISH;
-    }
-
-    info_ptr = png_create_info_struct(png_ptr);
-    if (!info_ptr){
-        YUI_LOG("[write_png_file] png_create_info_struct failed");
-        goto FINISH;
-    }
-
-    if (setjmp(png_jmpbuf(png_ptr))){
-        YUI_LOG("[write_png_file] Error during init_io");
-        goto FINISH;
-    }
-    /* write header */
-    png_init_io(png_ptr, outfile);
-    
-    if (setjmp(png_jmpbuf(png_ptr))){
-        YUI_LOG("[write_png_file] Error during writing header");
-        goto FINISH;
-    }
-    bit_depth = 8;
-    color_type = PNG_COLOR_TYPE_RGB_ALPHA;
-    png_set_IHDR(png_ptr, info_ptr, width, height,
-        bit_depth, color_type, PNG_INTERLACE_NONE,
-        PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE);
-    //png_set_gAMA(png_ptr, info_ptr, 1.0);
-    {
-        png_text text[3];
-        int txt_fields = 0;
-        char desc[256];
-        
-        time_t      gmt;
-        png_time    mod_time;
-        
-        time(&gmt);
-        png_convert_from_time_t(&mod_time, gmt);
-        png_set_tIME(png_ptr, info_ptr, &mod_time);
-    
-        text[txt_fields].key = "Title";
-        text[txt_fields].text = Cs2GetCurrentGmaecode();
-        text[txt_fields].compression = PNG_TEXT_COMPRESSION_NONE;
-        txt_fields++;
-
-        sprintf( desc, "Yaba Sanshiro Version %s\n VENDER: %s\n RENDERER: %s\n VERSION %s\n",YAB_VERSION,glGetString(GL_VENDOR),glGetString(GL_RENDERER),glGetString(GL_VERSION));
-        text[txt_fields].key ="Description";
-        text[txt_fields].text=desc;
-        text[txt_fields].compression = PNG_TEXT_COMPRESSION_NONE;
-        txt_fields++;
-        
-        png_set_text(png_ptr, info_ptr, text,txt_fields);
-    }       
-    png_write_info(png_ptr, info_ptr);
-
-
-    /* write bytes */
-    if (setjmp(png_jmpbuf(png_ptr))){
-        YUI_LOG("[write_png_file] Error during writing bytes");
-        goto FINISH;
-    }
-    png_write_image(png_ptr, row_pointers);
-
-    /* end write */
-    if (setjmp(png_jmpbuf(png_ptr))){
-        YUI_LOG("[write_png_file] Error during end of write");
-        goto FINISH;
-    }
-    
-    png_write_end(png_ptr, NULL);
-    rtn = 0;
-FINISH: 
-    if(outfile) fclose(outfile);
-    if(buf) free(buf);
-    if(bufRGB) free(bufRGB);
-    if(row_pointers) free(row_pointers);
-    return rtn;
-#endif
-  return 0;    
 }

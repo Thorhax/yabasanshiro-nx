@@ -2,51 +2,55 @@ project(yabause-nx)
 
 yab_port_start()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-
-#add_subdirectory(pugixml)
-#add_subdirectory(nanogui-sdl)
-
-include( ../glfw/external_zlib.cmake )
-include( ../glfw/external_libpng.cmake )
-
-#------------------------------------------------------------------------------
-# nlohmann/json
-#  * sets EXTERNAL_JSON_INCLUDE_DIR 
+# The launcher (adapted from NaGa's Dolphin NX frontend) uses C++23
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++23")
+# Frame pointers let the hang watchdog log call stacks
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
 
 set(PORT_INCLUDE_DIRS "../" )
-set(PORT_LIBRARIES EGL GLESv2 glapi drm_nouveau nx m SDL2  )
-
-#message("Nlohmann/json dir =" ${EXTERNAL_JSON_INCLUDE_DIR})
+# Order matters for static linking: SDL_ttf/SDL_image before the font and image libraries they
+# use, and SDL2 before the graphics stack.
+set(PORT_LIBRARIES
+	SDL2_ttf SDL2_image harfbuzz freetype bz2 png16 jpeg webpdemux webp
+	SDL2 glad EGL glapi drm_nouveau nx stdc++fs z m )
 
 set(yabause_nx_SOURCES
 	main.cpp
-	#InputManager.h
-	#InputManager.cpp
-	#InputConfig.h
-	#InputConfig.cpp
-	#MenuScreen.h
-	#MenuScreen.cpp
-) 
+	config.cpp
+	input.cpp
+	gl_shim.c
+)
 
+set(launcher_SOURCES
+	launcher/DolphinSwitch/Launcher.cpp
+	launcher/DolphinSwitch/Localization.cpp
+	launcher/DolphinSwitch/SystemLanguage.cpp
+	launcher/DolphinSwitch/UiAudio.cpp
+	launcher/FrontendAudio.cpp
+	launcher/StorageSD.cpp
+	launcher/compat/FileUtil.cpp
+	launcher/compat/IniFile.cpp
+	launcher/compat/SaturnGameFile.cpp
+)
+# Its sources include Dolphin-style paths ("DolphinSwitch/...", "Common/...", "UICommon/...")
+set_source_files_properties(${launcher_SOURCES} PROPERTIES
+	INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/launcher;${CMAKE_CURRENT_SOURCE_DIR}/launcher/compat;/opt/devkitpro/portlibs/switch/include/SDL2")
 
-include_directories( ${YABAUSE_INCLUDE_DIR} ${PORT_INCLUDE_DIRS} ${Boost_INCLUDE_DIR} "nanogui-sdl/include" "nanogui-sdl/ext/eigen" )
-link_directories( /opt/devkitpro/devkitA64/lib/ /opt/devkitpro/libnx/lib/ /opt/devkitpro/portlibs/switch/lib/  ) 
-add_executable(yabause-nx ${yabause_nx_SOURCES})
-target_link_libraries(yabause-nx yabause ${YABAUSE_LIBRARIES} ${PORT_LIBRARIES}  )
+include_directories( ${YABAUSE_INCLUDE_DIR} ${PORT_INCLUDE_DIRS} )
+link_directories( /opt/devkitpro/devkitA64/lib/ /opt/devkitpro/libnx/lib/ /opt/devkitpro/portlibs/switch/lib/  )
+add_executable(yabause-nx ${yabause_nx_SOURCES} ${launcher_SOURCES})
+target_include_directories(yabause-nx PRIVATE launcher)
+target_link_libraries(yabause-nx yabause ${YABAUSE_LIBRARIES} ${LIBCHDR_LIBRARIES} ${PORT_LIBRARIES}  )
 
-set( CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -specs=/opt/devkitpro/libnx/switch.specs -g -Wl,-Map,memory.map" )
+set( CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -g -Wl,-Map,memory.map" )
 
-#add_dependencies(yabause-nx Json png zlib)
 yab_port_success(yabause-nx)
-
-#install(TARGETS yabause-xu4 DESTINATION "/opt/retropie/emulators/yabasanshiro/")
-#install(FILES "README.md" DESTINATION "/opt/retropie/emulators/yabasanshiro/" )
 
 add_custom_command(TARGET yabause-nx
         POST_BUILD
-        COMMAND /bin/bash ${CMAKE_CURRENT_SOURCE_DIR}/genSwitchExecutables.sh 
+        COMMAND /bin/bash ${CMAKE_CURRENT_SOURCE_DIR}/genSwitchExecutables.sh ${CMAKE_CURRENT_SOURCE_DIR}
 				)
-				
+
 install(TARGETS yabause-nx DESTINATION "bin")
 install(FILES "README.md" DESTINATION "." )

@@ -201,6 +201,50 @@ extern PFNGLMEMORYBARRIERPROC glMemoryBarrier;
     #include <OpenGL/gl.h>
     #include <OpenGL/gl3.h>
 
+#elif defined(NX) && defined(_OGL3_)
+    // Desktop GL 4.3 core on Mesa/nouveau; entry points are loaded by glad
+    // through eglGetProcAddress once the port has made a context current.
+    #include <glad/glad.h>
+    #include <EGL/egl.h>
+
+    // Extensions glad (4.3 core, no extensions) doesn't load; the port fills
+    // these in and leaves them NULL when the driver lacks them.
+    typedef void (APIENTRYP PFNGLTEXTUREBARRIERNVPROC)(void);
+    extern PFNGLTEXTUREBARRIERNVPROC nx_glTextureBarrierNV;
+    #define glTextureBarrierNV nx_glTextureBarrierNV
+
+    // The renderer passes CPU pointers to glVertexAttribPointer, which the
+    // core profile forbids; nx/gl_shim.c streams them into a buffer instead.
+    // Forgets GL objects of a destroyed context; call after creating a new one
+    void nx_glShimReset(void);
+    void nx_glBindBuffer(GLenum target, GLuint buffer);
+    void nx_glBindVertexArray(GLuint array);
+    void nx_glEnableVertexAttribArray(GLuint index);
+    void nx_glDisableVertexAttribArray(GLuint index);
+    void nx_glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void * pointer);
+    void nx_glDrawArrays(GLenum mode, GLint first, GLsizei count);
+    // yglshaderes.c pushes debug groups it never pops; past the 64-deep stack
+    // every push raises a GL error. They're profiling labels only.
+    #undef glPushDebugGroup
+    #undef glPopDebugGroup
+    #define glPushDebugGroup(source, id, length, message) ((void)0)
+    #define glPopDebugGroup() ((void)0)
+
+    #ifndef NX_GL_SHIM_IMPL
+      #undef glBindBuffer
+      #undef glBindVertexArray
+      #undef glEnableVertexAttribArray
+      #undef glDisableVertexAttribArray
+      #undef glVertexAttribPointer
+      #undef glDrawArrays
+      #define glBindBuffer nx_glBindBuffer
+      #define glBindVertexArray nx_glBindVertexArray
+      #define glEnableVertexAttribArray nx_glEnableVertexAttribArray
+      #define glDisableVertexAttribArray nx_glDisableVertexAttribArray
+      #define glVertexAttribPointer nx_glVertexAttribPointer
+      #define glDrawArrays nx_glDrawArrays
+    #endif
+
 #else // Linux?
     #if defined(_OGL3_)
         #define GL_GLEXT_PROTOTYPES 1

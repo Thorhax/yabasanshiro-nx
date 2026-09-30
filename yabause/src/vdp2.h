@@ -476,6 +476,11 @@ void YglUpdateColorRam();
 void VdpResume( void );
 void VdpRevoke( void );
 
+// With YAB_ASYNC_RENDERING: non-zero makes the emulation thread wait at
+// VBLANK-OUT until the render thread has drawn the VDP2 layers, so the next
+// frame can't change registers/VRAM underneath it. Costs some parallelism.
+extern int Vdp2SyncVBlankOut;
+
 #ifdef __cplusplus
 }
 #endif

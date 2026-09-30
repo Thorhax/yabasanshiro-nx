@@ -931,7 +931,10 @@ int YabauseEmulate(void) {
 void SyncCPUtoSCSP() {
   //LOG("[SH2] WAIT SCSP");
   if (g_scsp_main_mode == 0) {
-    setM68kCounter(1);
+    // Leave the frame's cycle budget (set at VBlankIN) in place until the
+    // SCSP thread reports it consumed. Overwriting it here raced with that
+    // thread: if it hadn't polled the counter yet it never saw the budget,
+    // and both threads waited on each other forever.
     YabWaitEventQueue(q_scsp_finish);
     saved_m68k_cycles = 0;
     setM68kCounter(saved_m68k_cycles);

@@ -3779,6 +3779,10 @@ void YglSetClearColor(float r, float g, float b){
   _Ygl->clear_b = b;
 }
 
+#if defined(YAB_ASYNC_RENDERING)
+int Vdp2DisplayEnabledThisFrame(void);
+#endif
+
 void YglRender(void) {
    YglLevel * level;
    GLuint cprg=0;
@@ -3792,7 +3796,14 @@ void YglRender(void) {
    YGLLOG("YglRender\n");
 
    FrameProfileAdd("YglRender start");
+#if defined(YAB_ASYNC_RENDERING)
+   // Whether this frame is displayed was decided when it began (VBLANK-OUT).
+   // The game may briefly switch the display off during VBLANK-IN, when this
+   // runs, to update VRAM; that shouldn't blank the finished frame.
+   if (!Vdp2DisplayEnabledThisFrame()){
+#else
    if ((Vdp2Regs->TVMD & 0x8000) == 0){
+#endif
      glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
      goto render_finish;

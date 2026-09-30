@@ -46,6 +46,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <ctype.h>
 
@@ -112,13 +113,80 @@ u8 BupRamWritten;
 
 #if defined(NX)
 
+// No mmap on Horizon: keep the extended backup file in memory and write the
+// changed range back ourselves (YabMemMapFlush), which the OS would do for a
+// shared mapping on Linux.
+static char * nxmap_filename = NULL;
+static u8 * nxmap_ptr = NULL;
+static u32 nxmap_size = 0;
+static u32 nxmap_dirty_lo = 0xFFFFFFFF;
+static u32 nxmap_dirty_hi = 0;
+
 void * YabMemMap(char * filename, u32 size ) {
-   return malloc(size);
+  FILE * fp;
+  size_t got;
+
+  fp = fopen(filename, "rb");
+  if (fp == NULL) {
+    printf("YabMemMap: can't open %s\n", filename);
+    return NULL;
+  }
+  nxmap_ptr = (u8 *)calloc(1, size);
+  if (nxmap_ptr == NULL) {
+    fclose(fp);
+    return NULL;
+  }
+  // YabauseInit formats or extends the file to 'size' just before this
+  got = fread(nxmap_ptr, 1, size, fp);
+  fclose(fp);
+  if (got != size)
+    printf("YabMemMap: %s is %zu bytes, expected %u\n", filename, got, size);
+
+  nxmap_filename = strdup(filename);
+  nxmap_size = size;
+  nxmap_dirty_lo = 0xFFFFFFFF;
+  nxmap_dirty_hi = 0;
+  return nxmap_ptr;
+}
+
+void YabMemMapMarkDirty(u32 offset, u32 size) {
+  if (nxmap_ptr == NULL || size == 0) return;
+  if (offset < nxmap_dirty_lo) nxmap_dirty_lo = offset;
+  if (offset + size > nxmap_dirty_hi) nxmap_dirty_hi = offset + size;
+}
+
+// Writes whatever changed since the last flush back to the backup file.
+void YabMemMapFlush(void) {
+  FILE * fp;
+  u32 lo = nxmap_dirty_lo, hi = nxmap_dirty_hi;
+
+  if (nxmap_ptr == NULL || lo >= hi) return;
+  if (hi > nxmap_size) hi = nxmap_size;
+
+  fp = fopen(nxmap_filename, "r+b");
+  if (fp == NULL) {
+    printf("YabMemMapFlush: can't open %s\n", nxmap_filename);
+    return;
+  }
+  if (fseek(fp, lo, SEEK_SET) != 0 || fwrite(nxmap_ptr + lo, 1, hi - lo, fp) != hi - lo)
+    printf("YabMemMapFlush: write to %s failed\n", nxmap_filename);
+  fclose(fp);
+  nxmap_dirty_lo = 0xFFFFFFFF;
+  nxmap_dirty_hi = 0;
 }
 
 void YabFreeMap(void * p) {
-  free(p);
-} 
+  if (p != nxmap_ptr) {
+    free(p);
+    return;
+  }
+  YabMemMapFlush();
+  free(nxmap_ptr);
+  free(nxmap_filename);
+  nxmap_ptr = NULL;
+  nxmap_filename = NULL;
+  nxmap_size = 0;
+}
 
 #elif defined(__GNUC__) && !defined(_WINDOWS)
 
@@ -571,6 +639,9 @@ static void FASTCALL BupRamMemoryWriteByte(u32 addr, u8 val)
   }
   //printf("BupRamMemoryWriteByte %08X\n",addr);
   T1WriteByte(BupRam, addr|0x1, val);
+#if defined(NX)
+  if (yabsys.extend_backup) YabMemMapMarkDirty(addr|0x1, 1);
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////

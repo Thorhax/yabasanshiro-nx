@@ -262,8 +262,13 @@ void CheatDoPatches(void)
             if (cheatlist[i].enable == 0)
                continue;
             LOG("CheatDoPatches %08X", cheatlist[i].addr);
+            // Action Replay Dxxxxxxx: the next code only applies while the word matches
             if (MappedMemoryReadWord(cheatlist[i].addr, NULL) != cheatlist[i].val)
-               return;
+            {
+               if (cheatlist[i + 1].type == CHEATTYPE_NONE)
+                  return;
+               i++;
+            }
             break;
          case CHEATTYPE_BYTEWRITE:
             if (cheatlist[i].enable == 0)

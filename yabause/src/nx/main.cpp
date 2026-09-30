@@ -57,6 +57,7 @@ extern "C" {
 
 #include <EGL/eglext.h>
 
+#include "cheats.h"
 #include "config.h"
 #include "input.h"
 #include "DolphinSwitch/Forwarder.h"
@@ -740,6 +741,59 @@ static std::string stateDirectory()
   return nx::dataPath("states");
 }
 
+// Hands the cheat list to the quick menu
+static void publishCheats()
+{
+  std::vector<DolphinSwitch::RuntimeOverlay::CheatEntry> entries;
+  for (const nx::cheats::Cheat & cheat : nx::cheats::list())
+    entries.push_back({cheat.desc, cheat.enabled, cheat.supported});
+  DolphinSwitch::RuntimeOverlay::SetCheats(std::move(entries), nx::cheats::filePath(),
+                                           nx::cheats::fileNames());
+}
+
+// The system keyboard; false if cancelled or left empty
+static bool promptText(const char * header, const char * guide, const std::string & initial,
+                       std::string * output)
+{
+  SwkbdConfig keyboard;
+  if (R_FAILED(swkbdCreate(&keyboard, 0)))
+    return false;
+  swkbdConfigMakePresetDefault(&keyboard);
+  swkbdConfigSetHeaderText(&keyboard, header);
+  swkbdConfigSetGuideText(&keyboard, guide);
+  if (!initial.empty())
+    swkbdConfigSetInitialText(&keyboard, initial.c_str());
+  char buffer[512] = {};
+  swkbdConfigSetStringLenMax(&keyboard, sizeof(buffer) - 1);
+  const Result rc = swkbdShow(&keyboard, buffer, sizeof(buffer));
+  swkbdClose(&keyboard);
+  if (R_FAILED(rc) || buffer[0] == '\0')
+    return false;
+  *output = buffer;
+  return true;
+}
+
+// Asks for an Action Replay code and a name for it, then turns it on
+static void addCheat()
+{
+  namespace menu = DolphinSwitch::RuntimeOverlay;
+  std::string code, desc, error;
+  if (!promptText("Action Replay code", "e.g. 1602E8F0 0063 (separate several with +)", "", &code))
+    return;
+  // Checked before asking for the name, so a typo doesn't cost both prompts
+  if (!nx::cheats::check(code, &error)) {
+    menu::ShowAlert("Cheat code not added", error);
+    return;
+  }
+  promptText("Cheat name", "e.g. Infinite lives (optional)", "", &desc);
+  if (!nx::cheats::add(desc, code, &error)) {
+    menu::ShowAlert("Cheat code", error);
+  } else {
+    menu::SetStatus("Cheat added and enabled");
+  }
+  publishCheats();
+}
+
 // Carries out what the player picked in the quick menu. Runs on the main thread while the
 // game is paused and the main thread holds the GL context (saving a state reads the sprite
 // framebuffer back from the GPU).
@@ -789,6 +843,25 @@ static bool runMenuAction(const DolphinSwitch::RuntimeOverlay::Action & action)
     break;
   case ActionType::ToggleFPS:
     menu::SetShowFPS(!menu::ShowFPS());
+    break;
+  case ActionType::ToggleCheat: {
+    const auto & list = nx::cheats::list();
+    if (action.value >= 0 && action.value < (int)list.size()) {
+      const bool enable = !list[action.value].enabled;
+      nx::cheats::setEnabled(action.value, enable);
+      // Values a cheat wrote stay until the game changes them
+      menu::SetStatus(enable ? "Cheat enabled" : "Cheat disabled");
+      publishCheats();
+    }
+    break;
+  }
+  case ActionType::AddCheat:
+    addCheat();
+    break;
+  case ActionType::DeleteCheat:
+    if (nx::cheats::remove(action.value))
+      menu::SetStatus("Cheat deleted");
+    publishCheats();
     break;
   }
   return false;
@@ -923,6 +996,8 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   const char * game_code = Cs2GetCurrentGmaecode();
   DolphinSwitch::RuntimeOverlay::BeginSession(game, stateDirectory(), game_code ? game_code : "",
                                               false);
+  nx::cheats::load(game, game_code);
+  publishCheats();
 
   s_frames_done = 0;
   s_phase = Phase::Game;
@@ -997,6 +1072,7 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   glFinish();
 
   DolphinSwitch::RuntimeOverlay::EndSession();
+  nx::cheats::unload();
   nx::overlay::detachContext();
 
   printf("YabauseDeInit\n");

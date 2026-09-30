@@ -144,6 +144,7 @@ void ensureDataDirs()
   mkdir(NX_DATA_DIR "/games", 0777);
   mkdir(NX_DATA_DIR "/bios", 0777);
   mkdir(NX_DATA_DIR "/cache", 0777);
+  mkdir(NX_DATA_DIR "/cheats", 0777);
 }
 
 static bool pathExists(const std::string & path)

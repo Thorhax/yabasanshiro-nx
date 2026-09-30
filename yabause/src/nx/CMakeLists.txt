@@ -10,7 +10,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
 
 set(PORT_INCLUDE_DIRS "../" )
 # The app version shown in the homebrew menu, on HOME Menu shortcuts and to SteamGridDB
-set(YAB_NX_RELEASE_VERSION "1.0.1")
+set(YAB_NX_RELEASE_VERSION "1.1.0")
 
 # USB and SMB storage (third_party, built and installed beforehand by build_switch.sh)
 set(YAB_NX_THIRD_PARTY_PREFIX "${CMAKE_BINARY_DIR}/third_party/install" CACHE PATH
@@ -30,6 +30,7 @@ set(yabause_nx_SOURCES
 	input.cpp
 	gl_shim.c
 	overlay.cpp
+	cheats.cpp
 )
 
 # Dear ImGui (nx/imgui, the version NaGa's frontend uses) for the in-game quick menu

@@ -22,12 +22,15 @@ enum class ActionType
   EjectDisc,
   ChangeDisc,
   ToggleFPS,
+  ToggleCheat,  // value: index in the cheat list
+  AddCheat,
+  DeleteCheat,  // value: index in the cheat list
 };
 
 struct Action
 {
   ActionType type{};
-  int value = 0;  // save state slot
+  int value = 0;  // save state slot or cheat index
   std::string path;
 };
 
@@ -54,6 +57,15 @@ std::string CurrentStatus();
 void ShowAlert(std::string caption, std::string message);
 void RefreshStateInfo();
 void SetShowFPS(bool show);
+
+struct CheatEntry
+{
+  std::string name;
+  bool enabled = false;
+  bool supported = true;
+};
+// The game's cheats, and where they're kept (for the page's footer and empty message)
+void SetCheats(std::vector<CheatEntry> cheats, std::string file, std::vector<std::string> file_names);
 
 // Draws the menu with Dear ImGui (between ImGui::NewFrame and ImGui::Render)
 void Draw();

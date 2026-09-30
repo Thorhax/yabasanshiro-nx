@@ -16,8 +16,10 @@ NaGa's [Dolphin NX](https://github.com/NaGaa95/dolphin-nx) frontend.
 - **Covers**: import your own, or download them from [SteamGridDB](https://www.steamgriddb.com)
   one game at a time or for the whole library.
 - **HOME Menu shortcuts**: start a game straight from the Switch HOME Menu.
-- **Quick menu** (Minus + Plus in game): 10 save-state slots, disc eject and change, FPS counter,
-  console reset, return to the launcher.
+- **Quick menu** (Minus + Plus in game): 10 save-state slots, cheats, disc eject and change,
+  FPS counter, console reset, return to the launcher.
+- **Cheats**: Action Replay / GameShark codes, from RetroArch cheat files or typed in during a
+  game (see [Cheats](#cheats)).
 - **Controllers**, per player and per game: Saturn pad, 3D pad (analog), Virtual On Twin Stick or
   not connected, each with its own button mapping.
 - **BIOS**: picks a Japanese or US/European BIOS by the disc's region, or one you choose per game;
@@ -48,6 +50,7 @@ Everything the app keeps lives in `switch/yabasanshiro/`:
 | `games/` | Games (more folders, USB drives and SMB shares can be added in the launcher) |
 | `bios/` | Saturn BIOS files |
 | `states/` | Save states |
+| `cheats/` | Cheat files |
 | `covers/` | Cover art |
 | `GameSettings/` | Per-game settings |
 | `forwarders/` | HOME Menu shortcut configuration |
@@ -100,6 +103,21 @@ Controller types:
   right trigger / thumb = R / ZR; Switch Y fires the centre weapon.
 - **Not connected**: an empty port, for games that wait for player 2 when a second controller
   is plugged in.
+
+## Cheats
+
+The quick menu's **Cheats** page lists the game's cheats: **A** turns one on or off, **Y** adds a
+code with the keyboard (for example `1602E8F0 0063`; separate several codes with `+`) and
+**X** twice deletes one. Changes are saved straight away.
+
+Cheats are kept in RetroArch's `.cht` format in `switch/yabasanshiro/cheats/` (or its
+`Sega - Saturn/` subfolder), so RetroArch's Saturn cheat files can be copied in as they are.
+A file is found by the disc image's name (`Die Hard Arcade (USA).cht` for
+`Die Hard Arcade (USA).chd`) or by the disc's product code (`MK-81814.cht`); the Cheats page
+shows the names it looks for. Supported code types are `1` (16-bit write), `3` (8-bit write)
+and `D` (only apply the next code while a value matches). Master codes aren't needed and are
+ignored. Turning a cheat off stops it writing, but values it already changed stay until the
+game changes them.
 
 ## Building
 

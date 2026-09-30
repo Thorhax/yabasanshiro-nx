@@ -4,8 +4,9 @@
 // In-game quick menu, adapted for YabaSanshiro from NaGa's Dolphin NX frontend
 // (Source/Core/DolphinSwitch/RuntimeOverlay.cpp). Kept from the original: the page and
 // selection model, controller navigation and the ImGui drawing and style. Removed: the
-// GameCube/Wii pages (cheats, achievements, controller modes, frame generation, VBI skip) and
+// GameCube/Wii pages (achievements, controller modes, frame generation, VBI skip) and
 // Dolphin's asynchronous state handling; YabaSanshiro saves and loads while the game is paused.
+// The cheats page is YabaSanshiro's own (Action Replay codes, see nx/cheats.h).
 
 #include "DolphinSwitch/RuntimeOverlay.h"
 
@@ -33,6 +34,7 @@ enum class Page
   Main,
   SaveStates,
   LoadStates,
+  Cheats,
   Disc,
   DiscBrowser,
   Alert,
@@ -47,7 +49,8 @@ struct BrowserEntry
 
 constexpr std::uint64_t MENU_CHORD = HidNpadButton_Minus | HidNpadButton_Plus;
 constexpr int NUM_STATES = 10;
-constexpr int MAIN_ITEM_COUNT = 7;
+constexpr int MAIN_ITEM_COUNT = 8;
+constexpr int MAIN_SHOW_FPS = 5;
 constexpr int DISC_ITEM_COUNT = 3;
 
 std::mutex s_mutex;
@@ -69,6 +72,10 @@ std::string s_status;
 std::chrono::steady_clock::time_point s_status_until{};
 std::string s_alert_caption;
 std::string s_alert_message;
+std::vector<CheatEntry> s_cheats;
+std::string s_cheat_file;
+std::vector<std::string> s_cheat_file_names;
+int s_delete_armed = -1;  // cheat that the next X press deletes
 
 std::string Lower(std::string value)
 {
@@ -99,10 +106,17 @@ void QueueAction(Action action)
   s_actions.push_back(std::move(action));
 }
 
+void SetStatusLocked(std::string message)
+{
+  s_status = std::move(message);
+  s_status_until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+}
+
 void SetPage(Page page)
 {
   s_page = page;
   s_selection = 0;
+  s_delete_armed = -1;
 }
 
 void OpenMenu()
@@ -178,6 +192,8 @@ int ItemCount()
   case Page::SaveStates:
   case Page::LoadStates:
     return NUM_STATES + 1;
+  case Page::Cheats:
+    return static_cast<int>(s_cheats.size()) + 2;  // + Add cheat code, Back
   case Page::Disc:
     return DISC_ITEM_COUNT;
   case Page::DiscBrowser:
@@ -229,16 +245,19 @@ void ActivateSelection()
       SetPage(Page::LoadStates);
       break;
     case 3:
-      SetPage(Page::Disc);
+      SetPage(Page::Cheats);
       break;
     case 4:
+      SetPage(Page::Disc);
+      break;
+    case MAIN_SHOW_FPS:
       QueueAction({ActionType::ToggleFPS});
       break;
-    case 5:
+    case 6:
       QueueAction({ActionType::Reset});
       CloseMenu();
       break;
-    case 6:
+    case 7:
       QueueAction({ActionType::StopToLauncher});
       CloseMenu();
       break;
@@ -252,8 +271,7 @@ void ActivateSelection()
     }
     else if (s_page == Page::LoadStates && s_state_info[s_selection] == "Empty")
     {
-      s_status = "Slot " + std::to_string(s_selection + 1) + " is empty";
-      s_status_until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      SetStatusLocked("Slot " + std::to_string(s_selection + 1) + " is empty");
     }
     else
     {
@@ -261,6 +279,26 @@ void ActivateSelection()
                    s_selection + 1});
     }
     break;
+  case Page::Cheats:
+  {
+    const int count = static_cast<int>(s_cheats.size());
+    if (s_selection < count)
+    {
+      if (s_cheats[s_selection].supported)
+        QueueAction({ActionType::ToggleCheat, s_selection});
+      else
+        SetStatusLocked("This cheat uses codes the emulator can't apply");
+    }
+    else if (s_selection == count)
+    {
+      QueueAction({ActionType::AddCheat});
+    }
+    else
+    {
+      SetPage(Page::Main);
+    }
+    break;
+  }
   case Page::Disc:
     if (s_selection == 0)
     {
@@ -320,12 +358,55 @@ void RenderMainPage()
   SelectableRow("Resume game", 0);
   SelectableRow("Save state                                      >", 1);
   SelectableRow("Load state                                      >", 2);
-  SelectableRow("Disc management                                 >", 3);
+  SelectableRow("Cheats                                          >", 3);
+  SelectableRow("Disc management                                 >", 4);
   SelectableRow(std::string("Show FPS                         <  ") +
                     (s_show_fps ? "Enabled" : "Disabled") + "  >",
-                4);
-  SelectableRow("Reset console", 5);
-  SelectableRow("Return to launcher", 6);
+                MAIN_SHOW_FPS);
+  SelectableRow("Reset console", 6);
+  SelectableRow("Return to launcher", 7);
+}
+
+void RenderCheatsPage()
+{
+  const int count = static_cast<int>(s_cheats.size());
+  const float child_height = std::max(220.0f, ImGui::GetContentRegionAvail().y - 96.0f);
+  ImGui::BeginChild("cheats", {0.0f, child_height}, false, ImGuiWindowFlags_NoInputs);
+  if (count == 0)
+  {
+    ImGui::PushTextWrapPos(ImGui::GetWindowWidth() - 10.0f);
+    std::string names;
+    for (const std::string& name : s_cheat_file_names)
+      names += (names.empty() ? "" : " or ") + name;
+    ImGui::TextDisabled("No cheats for this game. Add Action Replay codes with Y, or copy a "
+                        "RetroArch cheat file to the cheats folder named %s.",
+                        names.empty() ? "after the game" : names.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+  }
+  for (int index = 0; index < count; ++index)
+  {
+    const CheatEntry& cheat = s_cheats[index];
+    const char* state = !cheat.supported     ? "[ n/a ]  " :
+                        cheat.enabled        ? "[ ON  ]  " :
+                                               "[ off ]  ";
+    std::string label = std::string(state) + Shorten(cheat.name, 64);
+    if (s_delete_armed == index)
+      label = "Press X again to delete:  " + Shorten(cheat.name, 46);
+    if (!cheat.supported)
+      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    else if (cheat.enabled)
+      ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(140, 235, 150, 255));
+    SelectableRow(label, index);
+    if (!cheat.supported || cheat.enabled)
+      ImGui::PopStyleColor();
+  }
+  SelectableRow("Add cheat code...", count);
+  SelectableRow("Back", count + 1);
+  ImGui::EndChild();
+  ImGui::Separator();
+  ImGui::TextDisabled("%s", Shorten(s_cheat_file, 80).c_str());
+  CenteredText("A  Toggle     Y  Add code     X  Delete     B  Back");
 }
 
 void RenderStatePage(bool saving)
@@ -422,6 +503,7 @@ void EndSession()
   s_capture_until_release = false;
   s_actions.clear();
   s_browser_entries.clear();
+  s_cheats.clear();
 }
 
 void UpdateInput(std::uint64_t down, std::uint64_t held)
@@ -454,8 +536,42 @@ void UpdateInput(std::uint64_t down, std::uint64_t held)
   else if (down & (HidNpadButton_Down | HidNpadButton_StickLDown))
     s_selection = (s_selection + 1) % count;
 
+  if (down & (HidNpadButton_Up | HidNpadButton_StickLUp | HidNpadButton_Down |
+              HidNpadButton_StickLDown | HidNpadButton_B | HidNpadButton_A | HidNpadButton_Y))
+    s_delete_armed = -1;
+
+  if (s_page == Page::Cheats)
+  {
+    const int count = static_cast<int>(s_cheats.size());
+    if (down & HidNpadButton_Y)
+    {
+      QueueAction({ActionType::AddCheat});
+      return;
+    }
+    if ((down & HidNpadButton_X) && s_selection < count)
+    {
+      // Twice, so a stray press doesn't lose a code typed by hand
+      if (s_delete_armed == s_selection)
+      {
+        s_delete_armed = -1;
+        QueueAction({ActionType::DeleteCheat, s_selection});
+      }
+      else
+      {
+        s_delete_armed = s_selection;
+      }
+      return;
+    }
+    if ((down & (HidNpadButton_Left | HidNpadButton_Right)) && s_selection < count &&
+        s_cheats[s_selection].supported)
+    {
+      QueueAction({ActionType::ToggleCheat, s_selection});
+      return;
+    }
+  }
+
   // Left/right flips the Show FPS option in place, as on NaGa's menu
-  if (s_page == Page::Main && s_selection == 4 &&
+  if (s_page == Page::Main && s_selection == MAIN_SHOW_FPS &&
       (down & (HidNpadButton_Left | HidNpadButton_Right)))
   {
     QueueAction({ActionType::ToggleFPS});
@@ -513,8 +629,18 @@ void SetShowFPS(bool show)
 void SetStatus(std::string message)
 {
   std::lock_guard lock{s_mutex};
-  s_status = std::move(message);
-  s_status_until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  SetStatusLocked(std::move(message));
+}
+
+void SetCheats(std::vector<CheatEntry> cheats, std::string file, std::vector<std::string> file_names)
+{
+  std::lock_guard lock{s_mutex};
+  s_cheats = std::move(cheats);
+  s_cheat_file = std::move(file);
+  s_cheat_file_names = std::move(file_names);
+  s_delete_armed = -1;
+  if (s_page == Page::Cheats)
+    s_selection = std::min(s_selection, static_cast<int>(s_cheats.size()) + 1);
 }
 
 std::string CurrentStatus()
@@ -584,6 +710,9 @@ void Draw()
     case Page::LoadStates:
       CenteredText("Load State");
       break;
+    case Page::Cheats:
+      CenteredText("Cheats");
+      break;
     case Page::Disc:
     case Page::DiscBrowser:
       CenteredText("Disc Management");
@@ -605,6 +734,9 @@ void Draw()
       break;
     case Page::LoadStates:
       RenderStatePage(false);
+      break;
+    case Page::Cheats:
+      RenderCheatsPage();
       break;
     case Page::Disc:
       RenderDiscPage();

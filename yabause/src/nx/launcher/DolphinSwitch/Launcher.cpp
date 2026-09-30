@@ -59,6 +59,7 @@
 #include "DolphinSwitch/UiAudio.h"
 #include "UICommon/GameFile.h"
 #include "UICommon/GameFileCache.h"
+#include "nx/saturn_controls.h"
 
 // YabaSanshiro: progress reporting for the app's hang watchdog (nx/main.cpp)
 void NxLauncherHeartbeat();
@@ -102,13 +103,15 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 8> LIBRARY_F
 }};
 
 // The per-game menu, split into the everyday actions and the destructive "Manage game" group.
-constexpr int GAME_MENU_COUNT = 5;
-constexpr int GAME_MENU_MANAGE_START = 4;
+constexpr int GAME_MENU_COUNT = 7;
+constexpr int GAME_MENU_MANAGE_START = 5;
 constexpr std::array<std::string_view, GAME_MENU_COUNT> GAME_MENU_ITEMS = {
     "Launch",
+    "Game settings",
     "Rename game",
     "Favorite / collections",
     "Cover settings",
+    "Clear game settings",
     "Delete game (remove from storage)",
 };
 
@@ -1249,8 +1252,12 @@ static constexpr SettingHelpEntry SETTING_HELP[] = {
      "available."},
 };
 
+std::optional<SettingHelpInfo> SaturnSettingHelp(std::string_view label);
+
 SettingHelpInfo SettingHelpFor(std::string_view title, const Row& row)
 {
+  if (std::optional<SettingHelpInfo> saturn = SaturnSettingHelp(row.label))
+    return *saturn;
   for (const SettingHelpEntry& entry : SETTING_HELP)
   {
     if (entry.label == row.label)
@@ -1269,12 +1276,12 @@ SettingHelpInfo SettingHelpFor(std::string_view title, const Row& row)
     return {"Game modification", "Enables or disables this game-specific code. Its effect is "
                                  "defined by the patch, Action Replay or Gecko entry."};
   if (row.value == ">")
-    return {"Settings group", "Opens this group of Dolphin settings."};
+    return {"Settings group", "Opens this group of settings."};
   if (!row.adjustable)
     return {"Management action",
             "Opens this Dolphin management action or a file-selection screen."};
   if (!title.empty())
-    return {"Dolphin setting", "Changes this Dolphin option. Keep the default value when "
+    return {"Setting", "Changes this option. Keep the default value when "
                                "troubleshooting an unexpected game-specific problem."};
   return {"Setting", "Changes this launcher option."};
 }
@@ -1487,6 +1494,8 @@ struct TouchGesture
   Uint32 started_at = 0;
 };
 
+struct SaturnOption;
+
 class Launcher
 {
 public:
@@ -1665,6 +1674,21 @@ private:
   int GridHitTest(int x, int y, int page_start);
 
   void SettingsRoot();
+  // YabaSanshiro settings pages (SaturnPages.inc)
+  Common::IniFile& SaturnGlobalFile(bool input);
+  std::optional<std::string> GetSaturnGlobal(bool input, std::string_view section,
+                                             std::string_view key);
+  void SetSaturnGlobal(bool input, std::string_view section, std::string_view key,
+                       const std::optional<std::string>& value);
+  void SaturnOptionsPage(std::string_view title, std::span<const SaturnOption> options,
+                         Game* game);
+  void SaturnControlsRoot(Game* game);
+  void SaturnMappingPage(int player, Game* game);
+  void SaturnGameSettingsRoot(Game* game);
+  void RenderSaturnCapture(std::string_view label, int position, int count, bool releasing,
+                           std::string_view current, std::string_view status = {});
+  std::optional<std::string> CaptureSaturnButton(std::string_view label, int position, int count,
+                                                 std::string_view current);
   void AppearanceSettings();
   void LibrarySettings();
   void LibraryFilterMenu();
@@ -1717,6 +1741,10 @@ private:
                        bool inverted = false);
 
   Store m_store;
+  Common::IniFile m_saturn_settings;
+  Common::IniFile m_saturn_input;
+  bool m_saturn_settings_loaded = false;
+  bool m_saturn_input_loaded = false;
   Localization m_localization;
   std::vector<std::string> m_sources;
   std::vector<Storage::SmbShare> m_shares;
@@ -1840,6 +1868,8 @@ private:
   SDL_Color m_card{5, 35, 56, 218};
   SDL_Color m_focus{12, 76, 108, 255};
 };
+
+#include "SaturnPages.inc"
 
 void Launcher::LoadDefaults()
 {
@@ -3821,7 +3851,7 @@ void Launcher::ShowInfoCard(std::string_view section, std::string_view title, st
                                           std::string(m_localization.Translate(effective_title)) :
                                           std::string(effective_title);
   const std::string localized_kind =
-      std::string(m_localization.Translate(kind.empty() ? "Dolphin setting" : kind));
+      std::string(m_localization.Translate(kind.empty() ? "Setting" : kind));
   const std::string localized_scope =
       scope.empty() ? std::string{} : std::string(m_localization.Translate(scope));
   const std::string localized_description = std::string(m_localization.Translate(description));
@@ -9278,7 +9308,7 @@ void Launcher::CoverSettings(Game* game)
 
 void Launcher::SettingsRoot()
 {
-  constexpr int count = 2;
+  constexpr int count = 5;
   constexpr int launcher_row = 0;
   constexpr int library_row = 1;
   constexpr int section_start = 2;
@@ -9287,8 +9317,8 @@ void Launcher::SettingsRoot()
   const int row_height = SettingsRowHeight();
   const int y0 = SettingsListY() + 40;
   constexpr int section_gap = 56;
-  static constexpr std::array<std::string_view, count> labels = {"Launcher",
-                                                                 "Library & storage"};
+  static constexpr std::array<std::string_view, count> labels = {
+      "Launcher", "Library & storage", "Emulation", "Video", "Controls"};
   const int visible =
       std::max(1, (m_height - y0 - SettingsFooterReserve() - section_gap) / row_height);
   const auto row_y = [&](int index) {
@@ -9358,6 +9388,12 @@ void Launcher::SettingsRoot()
           AppearanceSettings();
         else if (selection == library_row)
           LibrarySettings();
+        else if (selection == 2)
+          SaturnOptionsPage("Emulation", SATURN_EMULATION_OPTIONS, nullptr);
+        else if (selection == 3)
+          SaturnOptionsPage("Video", SATURN_VIDEO_OPTIONS, nullptr);
+        else if (selection == 4)
+          SaturnControlsRoot(nullptr);
         if (m_pending_launch)
           return;
         BeginScreenFx();
@@ -9462,9 +9498,9 @@ void Launcher::DrawGameMenu(Game* game, int selection)
   for (int index = 0; index < GAME_MENU_COUNT; ++index)
   {
     const bool current = index == selection;
-    const bool submenu = index == 2 || index == 3;
+    const bool submenu = index == 1 || index == 3 || index == 4;
     std::string_view label = GAME_MENU_ITEMS[index];
-    if (index == 2 && m_favorites.contains(game->key))
+    if (index == 3 && m_favorites.contains(game->key))
       label = "Favorite / collections  ★";
     else if (index == GAME_MENU_COUNT - 1 && game->installed_nand)
       label = "Uninstall WAD (keep save)";
@@ -9545,6 +9581,10 @@ void Launcher::PerGameMenu(Game* game, bool* launch, bool* rescan)
       }
       if (selection == 1)
       {
+        SaturnGameSettingsRoot(game);
+      }
+      else if (selection == 2)
+      {
         std::string title;
         if (PromptText("Rename game", game->title, &title, false, false))
         {
@@ -9557,13 +9597,27 @@ void Launcher::PerGameMenu(Game* game, bool* launch, bool* rescan)
           game->has_game_config = RegularFileExists(GameIniPath(*game));
         }
       }
-      else if (selection == 2)
+      else if (selection == 3)
       {
         EditGameOrganization(game);
       }
-      else if (selection == 3)
+      else if (selection == 4)
       {
         CoverSettings(game);
+      }
+      else if (selection == 5)
+      {
+        if (game->has_game_config)
+        {
+          std::remove(GameIniPath(*game).c_str());
+          InvalidateGameSettingCache(*game);
+          game->has_game_config = false;
+          Toast("Game settings cleared", 700);
+        }
+        else
+        {
+          Toast("No game settings found", 700);
+        }
       }
       else
       {

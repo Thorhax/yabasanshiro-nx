@@ -558,13 +558,16 @@ enum class SessionEnd {
 
 // Runs one game until the player quits it, then tears the emulator down again so the
 // launcher can take over the screen.
-static SessionEnd runGame(const std::string & game)
+// 'game_inis' are the game's own settings files (overrides of settings.ini and input.ini),
+// later ones winning
+static SessionEnd runGame(const std::string & game, const std::vector<std::string> & game_inis)
 {
   snprintf(cdpath, sizeof(cdpath), "%s", game.c_str());
   printf("Game: %s\n", cdpath);
+  for (const std::string & ini : game_inis)
+    printf("Game settings: %s%s\n", ini.c_str(), fileExists(ini) ? "" : " (none)");
 
-  // Settings may have changed in the launcher since the last game
-  s_settings = nx::loadSettings();
+  s_settings = nx::loadSettings(game_inis);
   if (s_settings.dynarec && !DynaJitAvailable()) {
     printf("JIT unavailable, falling back to the SH2 interpreter\n");
     s_settings.dynarec = false;
@@ -625,7 +628,7 @@ static SessionEnd runGame(const std::string & game)
   printf("vsync %s, sync_render %s\n", s_settings.vsync ? "on" : "off", s_settings.sync_render ? "on" : "off");
 
   // After YabauseInit, which resets the controller ports
-  s_input.init();
+  s_input.init(game_inis);
 
   resizeVideo(width, height);
 
@@ -720,6 +723,7 @@ int main(int argc, char** argv)
   // reliable (the launcher's SDL video and the emulator's EGL keep taking the display window
   // from each other, and emulator state carries over), so leaving a game restarts the app.
   std::string game;
+  std::vector<std::string> game_inis;
   if (argc > 1 && fileExists(argv[1])) {
     // A game passed on the command line (nxlink -a, forwarders) boots straight away
     game = argv[1];
@@ -737,11 +741,17 @@ int main(int argc, char** argv)
         continue;
       }
       game = request->path;
+      // Where the launcher keeps this game's settings (see Launcher::GetGameSetting): the
+      // file for its product number, and for a renamed game its own entry file over that
+      if (!request->game_id.empty())
+        game_inis.push_back(nx::dataPath("GameSettings/") + request->game_id + ".ini");
+      if (!request->game_config_path.empty())
+        game_inis.push_back(request->game_config_path);
       break;
     }
   }
 
-  if (!game.empty() && runGame(game) == SessionEnd::BackToLauncher) {
+  if (!game.empty() && runGame(game, game_inis) == SessionEnd::BackToLauncher) {
     // Ask hbloader to start us again once we've exited: back to a fresh launcher. Without
     // hbloader support this simply returns to the homebrew menu.
     if (envHasNextLoad()) {

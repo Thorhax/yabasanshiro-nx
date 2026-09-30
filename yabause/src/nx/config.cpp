@@ -70,6 +70,11 @@ bool IniFile::load(const std::string & path)
   return true;
 }
 
+bool IniFile::has(const std::string & key) const
+{
+  return values_.count(lower(key)) != 0;
+}
+
 std::string IniFile::get(const std::string & key, const std::string & def) const
 {
   auto it = values_.find(lower(key));
@@ -91,6 +96,40 @@ bool IniFile::getBool(const std::string & key, bool def) const
   if (v == "1" || v == "true" || v == "on" || v == "yes") return true;
   if (v == "0" || v == "false" || v == "off" || v == "no") return false;
   return def;
+}
+
+void LayeredIni::load(const std::string & global_path, const std::vector<std::string> & game_paths)
+{
+  global_ = IniFile();
+  games_.clear();
+  global_loaded_ = global_.load(global_path);
+  for (const std::string & path : game_paths) {
+    games_.emplace_back();
+    games_.back().load(path);
+  }
+}
+
+// The file that decides 'key': the last game file that sets it, else the global one
+const IniFile * LayeredIni::find(const std::string & key) const
+{
+  for (auto it = games_.rbegin(); it != games_.rend(); ++it)
+    if (it->has(key)) return &*it;
+  return &global_;
+}
+
+std::string LayeredIni::get(const std::string & key, const std::string & def) const
+{
+  return find(key)->get(key, def);
+}
+
+int LayeredIni::getInt(const std::string & key, int def) const
+{
+  return find(key)->getInt(key, def);
+}
+
+bool LayeredIni::getBool(const std::string & key, bool def) const
+{
+  return find(key)->getBool(key, def);
 }
 
 std::string dataPath(const char * name)
@@ -183,8 +222,8 @@ static const char * kDefaultSettings =
   "rbg_compute_shader = on\n"
   "# 0 = perspective correction, 1 = CPU tessellation, 2 = GPU tessellation\n"
   "polygon_mode = 0\n"
-  "# 0 = original aspect ratio, 1 = stretch\n"
-  "aspect = 0\n"
+  "# 1 = 4:3 (TV), 0 = square pixels, 2 = 16:9, 3 = stretch\n"
+  "aspect = 1\n"
   "# Wait for the display refresh when presenting. The emulator already paces\n"
   "# itself to 60Hz; with both on, a frame occasionally loses its background\n"
   "vsync = off\n"
@@ -192,11 +231,12 @@ static const char * kDefaultSettings =
   "# Turning this off is slightly faster but layers can flash black\n"
   "sync_render = on\n";
 
-Settings loadSettings()
+Settings loadSettings(const std::vector<std::string> & game_inis)
 {
   std::string path = dataPath("settings.ini");
-  IniFile ini;
-  if (!ini.load(path)) {
+  LayeredIni ini;
+  ini.load(path, game_inis);
+  if (!ini.globalLoaded()) {
     FILE * fp = fopen(path.c_str(), "w");
     if (fp) {
       fputs(kDefaultSettings, fp);

@@ -68,28 +68,6 @@ static const NamedButton kSwitchButtons[] = {
   { "RS_RIGHT", HidNpadButton_StickRRight },
 };
 
-// Indexed by PERPAD_* (peripheral.h)
-static const char * kSaturnNames[kSaturnButtons] = {
-  "UP", "RIGHT", "DOWN", "LEFT", "R", "L", "START", "A", "B", "C", "X", "Y", "Z",
-};
-
-// Saturn pad layout: A B C on the bottom row, X Y Z on the top row.
-static const char * kDefaultBinds[kSaturnButtons] = {
-  "DUP LS_UP",        // UP
-  "DRIGHT LS_RIGHT",  // RIGHT
-  "DDOWN LS_DOWN",    // DOWN
-  "DLEFT LS_LEFT",    // LEFT
-  "ZR",               // R
-  "ZL",               // L
-  "PLUS",             // START
-  "B",                // A
-  "A",                // B
-  "R",                // C
-  "Y",                // X
-  "X",                // Y
-  "L",                // Z
-};
-
 static u64 parseBinds(const std::string & value, const char * where)
 {
   u64 bits = 0;
@@ -130,26 +108,29 @@ static void writeDefaultFile(const std::string & path)
 
   for (int p = 0; p < kMaxPlayers; p++) {
     fprintf(fp, "\n[player%d]\n", p + 1);
-    for (int i = 0; i < kSaturnButtons; i++)
-      fprintf(fp, "%-5s = %s\n", kSaturnNames[i], kDefaultBinds[i]);
+    for (const SaturnButton & button : kSaturnButtonInfo)
+      fprintf(fp, "%-5s = %.*s\n", std::string(button.key).c_str(),
+              (int)button.defaults.size(), button.defaults.data());
   }
   fclose(fp);
 }
 
-void Input::init()
+void Input::init(const std::vector<std::string> & game_inis)
 {
   std::string path = dataPath("input.ini");
-  IniFile ini;
-  if (!ini.load(path)) {
+  LayeredIni ini;
+  ini.load(path, game_inis);
+  if (!ini.globalLoaded()) {
     writeDefaultFile(path);
-    ini.load(path);
+    ini.load(path, game_inis);
   }
 
   for (int p = 0; p < kMaxPlayers; p++) {
     for (int i = 0; i < kSaturnButtons; i++) {
+      const SaturnButton & button = kSaturnButtonInfo[i];
       char key[32];
-      snprintf(key, sizeof(key), "player%d.%s", p + 1, kSaturnNames[i]);
-      maps_[p].bind[i] = parseBinds(ini.get(key, kDefaultBinds[i]), key);
+      snprintf(key, sizeof(key), "player%d.%.*s", p + 1, (int)button.key.size(), button.key.data());
+      maps_[p].bind[i] = parseBinds(ini.get(key, std::string(button.defaults)), key);
     }
   }
 

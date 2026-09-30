@@ -20,6 +20,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 
 #include <map>
 #include <string>
+#include <vector>
 
 // Everything the Switch port keeps on the SD card lives under this directory,
 // next to the .nro itself.
@@ -36,6 +37,7 @@ class IniFile {
 public:
   bool load(const std::string & path);
 
+  bool has(const std::string & key) const;
   std::string get(const std::string & key, const std::string & def) const;
   int getInt(const std::string & key, int def) const;
   bool getBool(const std::string & key, bool def) const;
@@ -44,6 +46,26 @@ public:
 
 private:
   std::map<std::string, std::string> values_;
+};
+
+// A game's own settings files over the global one: keys a game file sets win, and later
+// game files win over earlier ones.
+class LayeredIni {
+public:
+  // A missing file just contributes nothing.
+  void load(const std::string & global_path, const std::vector<std::string> & game_paths);
+
+  bool globalLoaded() const { return global_loaded_; }
+  std::string get(const std::string & key, const std::string & def) const;
+  int getInt(const std::string & key, int def) const;
+  bool getBool(const std::string & key, bool def) const;
+
+private:
+  const IniFile * find(const std::string & key) const;
+
+  IniFile global_;
+  std::vector<IniFile> games_;
+  bool global_loaded_ = false;
 };
 
 struct Settings {
@@ -56,7 +78,7 @@ struct Settings {
   int framelimit = 0;             // 0 .. 60Hz, 1 .. no limit, 2 .. 120Hz
   bool sh2_cache = true;
   int cart = 0;                   // CART_* in cs0.h
-  int aspect_mode = 0;            // passed to VIDCore->Resize
+  int aspect_mode = 1;            // ASPECT_RATE_MODE (ygl.h): 1 .. 4:3, passed to VIDCore->Resize
   bool vsync = false;             // the emulator's own limiter already paces frames
   bool sync_render = true;        // Vdp2SyncVBlankOut
   int scsp_sync_per_frame = 1;
@@ -70,7 +92,9 @@ void ensureDataDirs();
 // already exists at the new location. Logs what it did.
 void migrateOldDataDir();
 
-// Loads NX_DATA_DIR/settings.ini, writing a commented default file if missing.
-Settings loadSettings();
+// Loads NX_DATA_DIR/settings.ini, writing a commented default file if missing, with the
+// game's own settings file (if any) over it. The launcher's settings pages use the same keys
+// and defaults (launcher/SaturnPages.inc).
+Settings loadSettings(const std::vector<std::string> & game_inis = {});
 
 } // namespace nx

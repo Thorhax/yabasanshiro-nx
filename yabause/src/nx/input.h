@@ -18,12 +18,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include <switch.h>
 
-namespace nx {
+#include "saturn_controls.h"
 
-constexpr int kMaxPlayers = 2;
-constexpr int kSaturnButtons = 13;   // PERPAD_UP .. PERPAD_Z
+namespace nx {
 
 // For each Saturn button, the set of Switch buttons (HidNpadButton bits)
 // that press it. Any one of them being held presses the Saturn button.
@@ -33,9 +35,10 @@ struct ButtonMap {
 
 class Input {
 public:
-  // Loads NX_DATA_DIR/input.ini (writing the defaults if missing) and
-  // attaches a standard Saturn pad to each port.
-  void init();
+  // Loads NX_DATA_DIR/input.ini (writing the defaults if missing), with the
+  // game's own bindings (if any) over it, and attaches a standard Saturn pad
+  // to each port.
+  void init(const std::vector<std::string> & game_inis = {});
 
   // Reads the Switch controllers and forwards the result to the emulator.
   void update();

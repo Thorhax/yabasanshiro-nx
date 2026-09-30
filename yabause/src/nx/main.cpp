@@ -58,9 +58,11 @@ extern "C" {
 
 #include "config.h"
 #include "input.h"
+#include "DolphinSwitch/Forwarder.h"
 #include "DolphinSwitch/Launcher.h"
 #include "DolphinSwitch/RuntimeOverlay.h"
 #include "overlay.h"
+#include "UICommon/GameFile.h"
 #include "sh2_dynarec_devmiyax/dynarec_jit_nx.h"
 
 // Must match sh2_dynarec_devmiyax/DynarecSh2CInterface.cpp
@@ -196,22 +198,26 @@ void YabauseThread_coldBoot()
 // Logging: nxlink when a host is listening, otherwise a file on the SD card
 
 static int s_nxlink_sock = -1;
+static bool s_sockets = false;
 static FILE * s_logfile = NULL;
 
+// Sockets stay up for the whole run: the launcher uses them for SMB shares and SteamGridDB
 extern "C" void userAppInit()
 {
-  if (R_SUCCEEDED(socketInitializeDefault())) {
+  s_sockets = R_SUCCEEDED(socketInitializeDefault());
+  if (s_sockets)
     s_nxlink_sock = nxlinkStdio();
-    if (s_nxlink_sock < 0) socketExit();
-  }
 }
 
 extern "C" void userAppExit()
 {
   if (s_nxlink_sock >= 0) {
     close(s_nxlink_sock);
-    socketExit();
     s_nxlink_sock = -1;
+  }
+  if (s_sockets) {
+    socketExit();
+    s_sockets = false;
   }
 }
 
@@ -613,6 +619,10 @@ static bool runMenuAction(const DolphinSwitch::RuntimeOverlay::Action & action)
     menu::SetStatus("Disc tray opened");
     break;
   case ActionType::ChangeDisc:
+    if (!DolphinSwitch::PrepareLaunchStorage(action.path)) {
+      menu::ShowAlert("Change disc", "The selected disc's storage device is no longer available.");
+      break;
+    }
     snprintf(cdpath, sizeof(cdpath), "%s", action.path.c_str());
     printf("Change disc: %s\n", cdpath);
     Cs2ForceCloseTray(CDCORE_ISO, cdpath);
@@ -833,6 +843,32 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   return end;
 }
 
+// Arguments from a HOME Menu shortcut: --game <path> [--library-id <id>] [--game-config <ini>];
+// a bare path (nxlink -a) works too
+static std::optional<DolphinSwitch::LaunchRequest> directLaunchRequest(int argc, char** argv)
+{
+  DolphinSwitch::LaunchRequest request;
+  bool found = false;
+  for (int index = 1; index < argc; ++index) {
+    if (!argv[index] || !argv[index][0]) continue;
+    const std::string argument = argv[index];
+    const bool has_value = index + 1 < argc && argv[index + 1];
+    if ((argument == "--game" || argument == "-g") && has_value) {
+      request.path = argv[++index];
+      found = true;
+    } else if (argument == "--game-config" && has_value) {
+      request.game_config_path = argv[++index];
+    } else if (argument == "--library-id" && has_value) {
+      request.library_id = argv[++index];
+    } else if (!found && argument[0] != '-') {
+      request.path = argument;
+      found = true;
+    }
+  }
+  if (!found || request.path.empty()) return std::nullopt;
+  return request;
+}
+
 int main(int argc, char** argv)
 {
   nx::ensureDataDirs();
@@ -863,12 +899,30 @@ int main(int argc, char** argv)
   // One game per process: running a second game after the first in the same process isn't
   // reliable (the launcher's SDL video and the emulator's EGL keep taking the display window
   // from each other, and emulator state carries over), so leaving a game restarts the app.
+  DolphinSwitch::Forwarder::SetSelfPath(self_path);
+
   std::string game;
   std::vector<std::string> game_inis;
-  if (argc > 1 && fileExists(argv[1])) {
-    // A game passed on the command line (nxlink -a, forwarders) boots straight away
-    game = argv[1];
-  } else {
+  std::optional<DolphinSwitch::LaunchRequest> direct = directLaunchRequest(argc, argv);
+  if (direct) {
+    // HOME Menu shortcuts (--game ...) and nxlink -a <path> boot the game straight away
+    std::string path;
+    const bool ready = direct->library_id.empty() ?
+      DolphinSwitch::PrepareLaunchStorage(direct->path, &path) :
+      DolphinSwitch::ResolveLibraryLaunchPath(direct->library_id, direct->path, &path);
+    if (!ready || path.empty())
+      path = direct->path;
+    printf("Direct launch: %s%s\n", path.c_str(), fileExists(path) ? "" : " (not found)");
+    if (fileExists(path)) {
+      game = path;
+      const UICommon::GameFile file(game);
+      if (file.IsValid() && !file.GetGameID().empty())
+        game_inis.push_back(nx::dataPath("GameSettings/") + file.GetGameID() + ".ini");
+      if (!direct->game_config_path.empty())
+        game_inis.push_back(direct->game_config_path);
+    }
+  }
+  if (game.empty()) {
     std::string startup_message;
     while (appletMainLoop()) {
       std::optional<DolphinSwitch::LaunchRequest> request =

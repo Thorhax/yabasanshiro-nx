@@ -53,6 +53,7 @@
 #include "Common/ScopeGuard.h"
 #include "DiscIO/Enums.h"
 #include "DolphinSwitch/CoverDownload.h"
+#include "DolphinSwitch/Forwarder.h"
 #include "DolphinSwitch/Localization.h"
 #include "DolphinSwitch/Storage.h"
 #include "DolphinSwitch/SystemLanguage.h"
@@ -103,14 +104,15 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 8> LIBRARY_F
 }};
 
 // The per-game menu, split into the everyday actions and the destructive "Manage game" group.
-constexpr int GAME_MENU_COUNT = 7;
-constexpr int GAME_MENU_MANAGE_START = 5;
+constexpr int GAME_MENU_COUNT = 8;
+constexpr int GAME_MENU_MANAGE_START = 6;
 constexpr std::array<std::string_view, GAME_MENU_COUNT> GAME_MENU_ITEMS = {
     "Launch",
     "Game settings",
     "Rename game",
     "Favorite / collections",
     "Cover settings",
+    "Create HOME shortcut",
     "Clear game settings",
     "Delete game (remove from storage)",
 };
@@ -242,7 +244,7 @@ public:
     FILE* file = std::fopen(temporary.c_str(), "wb");
     if (!file)
       return false;
-    bool ok = std::fputs("# Dolphin NX SDL launcher\n", file) >= 0;
+    bool ok = std::fputs("# YabaSanshiro NX launcher\n", file) >= 0;
     for (const auto& [key, value] : m_values)
     {
       if (!ok || std::fprintf(file, "%s = %s\n", key.c_str(), value.c_str()) < 0)
@@ -786,7 +788,7 @@ static constexpr SettingHelpEntry SETTING_HELP[] = {
      "Changes the language used by the SDL launcher. System follows the console language. "
      "Translation overrides can be placed in switch/dolphin/i18n on the SD card."},
     {"Library & storage", "Settings group",
-     "Manages game folders, save data, installed titles, WAD content, and cover artwork used by "
+     "Manages game folders, USB drives, SMB network shares and cover artwork used by "
      "the launcher."},
     {"RetroAchievements", "Online service",
      "Signs in to RetroAchievements and controls achievement, hardcore-mode and progress "
@@ -1220,7 +1222,7 @@ static constexpr SettingHelpEntry SETTING_HELP[] = {
      "Enables or disables Dolphin's patch, Action Replay and Gecko execution for this game."},
 
     {"Theme", "Launcher appearance",
-     "Changes the launcher's background and visual style. It has no effect on Dolphin's in-game "
+     "Changes the launcher's background and visual style. It has no effect on the in-game "
      "renderer or performance."},
     {"Games per row", "Library layout",
      "Sets how many game covers appear across each library row. More columns make every cover "
@@ -1248,7 +1250,7 @@ static constexpr SettingHelpEntry SETTING_HELP[] = {
      "Imports a PNG, JPEG, WebP or BMP image from SD, USB or SMB storage and stores it as this "
      "game's custom cover."},
     {"Remove custom cover", "Artwork management",
-     "Deletes this game's custom cover. Dolphin falls back to embedded game artwork when "
+     "Deletes this game's custom cover. The launcher falls back to embedded game artwork when "
      "available."},
 };
 
@@ -1279,7 +1281,7 @@ SettingHelpInfo SettingHelpFor(std::string_view title, const Row& row)
     return {"Settings group", "Opens this group of settings."};
   if (!row.adjustable)
     return {"Management action",
-            "Opens this Dolphin management action or a file-selection screen."};
+            "Opens this management action or a file-selection screen."};
   if (!title.empty())
     return {"Setting", "Changes this option. Keep the default value when "
                                "troubleshooting an unexpected game-specific problem."};
@@ -1702,6 +1704,14 @@ private:
                           std::string_view selection_title = {});
   void PerGameMenu(Game* game, bool* launch, bool* rescan);
   void CoverSettings(Game* game);
+  void CreateHomeShortcut(Game* game);
+  bool ChooseForwarderIcon(Game* game, std::string* output_path);
+  void DownloadCovers();
+  void NetworkSharesScreen();
+  bool EditSmbShare(Storage::SmbShare* share, bool creating);
+  void DownloadCover(Game* game);
+  int ChooseCoverArtwork(const std::vector<CoverDownload::Artwork>& artwork,
+                         std::string_view game_name);
   void ImportCoverFromFile(Game* game);
 
   bool DeleteTree(const std::string& path, const std::atomic_bool* cancel = nullptr);
@@ -2037,7 +2047,7 @@ bool Launcher::Initialize(bool applet_installer)
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0)
   {
-    std::fprintf(stderr, "[Dolphin Switch] SDL initialization failed: %s\n", SDL_GetError());
+    std::fprintf(stderr, "[Launcher] SDL initialization failed: %s\n", SDL_GetError());
     return false;
   }
   m_sdl_ready = true;
@@ -2056,17 +2066,17 @@ bool Launcher::Initialize(bool applet_installer)
     m_width = 1920;
     m_height = 1080;
   }
-  m_window = SDL_CreateWindow("Dolphin", 0, 0, m_width, m_height, SDL_WINDOW_FULLSCREEN);
+  m_window = SDL_CreateWindow("YabaSanshiro NX", 0, 0, m_width, m_height, SDL_WINDOW_FULLSCREEN);
   if (!m_window)
   {
-    std::fprintf(stderr, "[Dolphin Switch] SDL window creation failed: %s\n", SDL_GetError());
+    std::fprintf(stderr, "[Launcher] SDL window creation failed: %s\n", SDL_GetError());
     return false;
   }
   m_renderer =
       SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (!m_renderer)
   {
-    std::fprintf(stderr, "[Dolphin Switch] SDL renderer creation failed: %s\n", SDL_GetError());
+    std::fprintf(stderr, "[Launcher] SDL renderer creation failed: %s\n", SDL_GetError());
     return false;
   }
   SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
@@ -2112,7 +2122,7 @@ bool Launcher::Initialize(bool applet_installer)
     // Present the launcher as soon as SDL, fonts and the theme are ready. Source restoration,
     // network startup and scanning happen after this frame so the user never waits on black.
     ClearBackground();
-    DrawHeader("Dolphin");
+    DrawHeader("YabaSanshiro NX");
     const int panel_width = std::min(940, m_width - 64);
     constexpr int panel_height = 200;
     GlassPanel((m_width - panel_width) / 2, m_height / 2 - 88, panel_width, panel_height);
@@ -2123,8 +2133,7 @@ bool Launcher::Initialize(bool applet_installer)
         m_localization.Translate("The first page will appear as soon as it is ready."), m_dim);
     SDL_RenderPresent(m_renderer);
     LoadSourcesAndShares();
-    // Online cover download isn't available for Saturn games yet
-    m_cover_download_ready = false;
+    m_cover_download_ready = CoverDownload::Initialize();
   }
   if (!applet_installer)
     Storage::SetUsbStatusCallback(UsbStatusWake);
@@ -2207,13 +2216,15 @@ void Launcher::Shutdown()
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
   m_image_ready = m_ttf_ready = m_sdl_ready = false;
 
+  if (m_cover_download_ready)
+    CoverDownload::Shutdown();
   m_cover_download_ready = false;
   NxLauncherStep("shutdown: done");
 }
 
 bool Launcher::ConfirmApplicationExit()
 {
-  if (!Confirm("Exit Dolphin?",
+  if (!Confirm("Exit YabaSanshiro NX?",
                std::array<std::string, 2>{
                    std::string(m_localization.Translate(
                        "Active scans and network operations will be cancelled safely.")),
@@ -2238,12 +2249,12 @@ void Launcher::PrepareApplicationExit()
   // blocking in join() in that state made the Switch compositor fall back to a black frame.
   const auto render_closing = [&] {
     ClearBackground();
-    DrawHeader("Dolphin");
+    DrawHeader("YabaSanshiro NX");
     const int panel_width = std::min(940, m_width - 64);
     constexpr int panel_height = 200;
     GlassPanel((m_width - panel_width) / 2, m_height / 2 - 88, panel_width, panel_height);
     DrawWrappedCentered(m_font_large, m_width / 2, m_height / 2 - 48, panel_width - 64, 48, 2,
-                        m_localization.Translate("Closing Dolphin..."), m_value);
+                        m_localization.Translate("Closing YabaSanshiro NX..."), m_value);
     DrawWrappedCentered(m_font_small, m_width / 2, m_height / 2 + 30, panel_width - 64, 32, 2,
                         m_localization.Translate("Finishing background operations safely."), m_dim);
     SDL_RenderPresent(m_renderer);
@@ -2277,7 +2288,11 @@ void Launcher::PrepareApplicationExit()
   StopUsbInitialization();
   StopAutoMountShares();
   StopCoverDecodeWorker();
-  m_cover_download_ready = false;
+  if (m_cover_download_ready)
+  {
+    CoverDownload::Shutdown();
+    m_cover_download_ready = false;
+  }
   FlushPendingSaves();
   // On a game launch storage must stay mounted, but on an explicit application exit it should be
   // retired before SDL disappears so open SMB/USB registrations cannot prolong a black teardown.
@@ -3468,7 +3483,7 @@ void Launcher::DrawHeader(std::string_view title, std::string_view context)
   // Header titles are launcher-owned UI.  Context strings are deliberately left raw because
   // they frequently contain game names, paths, profile names, or remote share names.
   title = m_localization.Translate(title);
-  DrawPageHeader(title, "Dolphin", context);
+  DrawPageHeader(title, "YabaSanshiro NX", context);
 }
 
 int Launcher::SettingsRowHeight() const
@@ -5721,7 +5736,7 @@ void Launcher::RenderMessage(std::string_view title, std::span<const std::string
     message.append(displayed_line);
   }
   if (message.empty())
-    message = std::string(m_localization.Translate("Unknown Dolphin error"));
+    message = std::string(m_localization.Translate("Unknown error"));
 
   BeginScreenFx();
   while (BeginFrame())
@@ -7588,7 +7603,7 @@ void Launcher::GameSourcesScreen()
     const std::string summary =
         std::to_string(m_sources.size()) + " " +
         std::string(m_localization.Translate(m_sources.size() == 1 ? "folder" : "folders"));
-    DrawPageHeader(m_localization.Translate("Game folders"), "Dolphin", summary,
+    DrawPageHeader(m_localization.Translate("Game folders"), "YabaSanshiro NX", summary,
                    m_localization.Translate("Scanned recursively"));
     GlassPanel(44, list_y - 13, m_width - 88,
                std::min(visible, count - top) * row_height + 18);
@@ -7944,7 +7959,7 @@ void Launcher::RunBusyTask(std::string_view title, std::string_view detail,
           m_font_small, m_width / 2, panel_y + 112,
           m_localization.Translate(cancel && cancel->load(std::memory_order_acquire) ?
                                        "Cancelling at the next safe point..." :
-                                       "Do not remove the active storage device or close Dolphin."),
+                                       "Do not remove the active storage device or close the app."),
           m_dim);
       if (cancel && !cancel->load(std::memory_order_acquire))
       {
@@ -8311,6 +8326,8 @@ std::string Launcher::FileBrowser(const std::string& start, bool select_folder, 
                              Storage::SmbBrowsePath(share), Kind::Smb,
                              ui(mounted ? "SMB · Connected" : "SMB · Connect")});
         }
+        entries.push_back(
+            {ui("Manage SMB shares"), {}, Kind::ManageSmb, ui("Add / edit / connect")});
       }
       else
       {
@@ -8505,6 +8522,11 @@ std::string Launcher::FileBrowser(const std::string& start, bool select_folder, 
             }
             current = NormalizePath(entry.path);
             selection = top = 0;
+            rebuild = true;
+          }
+          else if (entry.kind == Kind::ManageSmb)
+          {
+            NetworkSharesScreen();
             rebuild = true;
           }
           else if (entry.kind == Kind::File)
@@ -8856,7 +8878,7 @@ bool Launcher::EjectUsbLocation(std::string_view stable_id)
 
 void Launcher::LibrarySettings()
 {
-  constexpr int row_count = 2;
+  constexpr int row_count = 4;
   const int row_height = SettingsRowHeight();
   const int start_y = SettingsListY();
   auto& saved = m_row_positions["Library & storage\n"];
@@ -8864,8 +8886,12 @@ void Launcher::LibrarySettings()
   const auto open_row = [&] {
     if (selection == 0)
       GameSourcesScreen();
-    else
+    else if (selection == 1)
       FileManager();
+    else if (selection == 2)
+      NetworkSharesScreen();
+    else
+      DownloadCovers();
     BeginScreenFx();
   };
   BeginScreenFx();
@@ -8929,12 +8955,19 @@ void Launcher::LibrarySettings()
                         m_highlight_y + (target - m_highlight_y) * 0.30f;
     DrawRowHighlight(column_x, static_cast<int>(m_highlight_y), column_width, row_height - 4);
 
+    const int connected = std::ranges::count_if(
+        m_shares, [](const Storage::SmbShare& share) { return Storage::IsSmbMounted(share.id); });
     const std::string folder_value =
         std::to_string(m_sources.size()) + " " +
         std::string(m_localization.Translate(m_sources.size() == 1 ? "folder" : "folders"));
-    const std::array<std::string_view, row_count> labels = {"Game folders", "File manager"};
+    const std::string smb_value = std::to_string(connected) + " / " +
+                                  std::to_string(m_shares.size()) + " " +
+                                  std::string(m_localization.Translate("connected"));
+    const std::array<std::string_view, row_count> labels = {
+        "Game folders", "File manager", "SMB network shares", "Download covers"};
     const std::array<std::string, row_count> values = {
-        folder_value, std::string(m_localization.Translate("SD card"))};
+        folder_value, std::string(m_localization.Translate("SD / USB / SMB")), smb_value,
+        std::string(m_localization.Translate("SteamGridDB batch"))};
     for (int row = 0; row < row_count; ++row)
     {
       const bool current = row == selection;
@@ -8949,6 +8982,1403 @@ void Launcher::LibrarySettings()
     WaitForNextFrame();
   }
   saved.first = selection;
+}
+
+bool Launcher::ChooseForwarderIcon(Game* game, std::string* output_path)
+{
+  if (!game || !output_path)
+    return false;
+  const std::string base = std::string(DATA_DIRECTORY) + "/forwarders";
+  const std::string temporary_directory = base + "/iconpick";
+  EnsureDirectory(base);
+  EnsureDirectory(temporary_directory);
+  if (DIR* directory = ::opendir(temporary_directory.c_str()))
+  {
+    while (dirent* entry = ::readdir(directory))
+    {
+      const std::string name = entry->d_name;
+      if (name.starts_with("gicon_") && name.ends_with(".png"))
+        std::remove(JoinPath(temporary_directory, name).c_str());
+    }
+    ::closedir(directory);
+  }
+
+  std::vector<std::string> paths;
+  std::atomic_bool cancel{false};
+  const std::string cover_path = CoverPath(*game);
+  if (RegularFileExists(cover_path))
+    paths.push_back(cover_path);
+  paths.emplace_back("romfs:/fwd/icon.jpg");
+
+  const std::string api_key = m_store.Get("Network/SteamGridDBKey");
+  if (!api_key.empty())
+  {
+    RunBusyTask(
+        "Fetching icons from SteamGridDB", game->title,
+        [&] {
+          CoverDownload::RequestOptions options{&cancel};
+          std::vector<CoverDownload::GameResult> games;
+          if (CoverDownload::SearchGames(api_key, game->title, &games, &options) ==
+                  CoverDownload::Result::Ok &&
+              !games.empty())
+          {
+            std::vector<CoverDownload::Artwork> icons;
+            if (CoverDownload::FetchIcons(api_key, games.front().id, &icons, &options) ==
+                CoverDownload::Result::Ok)
+            {
+              for (std::size_t index = 0;
+                   index < icons.size() && index < 14 && !cancel.load(std::memory_order_acquire);
+                   ++index)
+              {
+                const std::string path =
+                    JoinPath(temporary_directory, "gicon_" + std::to_string(index) + ".png");
+                if (CoverDownload::DownloadImage(icons[index].url, path, &options) ==
+                    CoverDownload::Result::Ok)
+                  paths.push_back(path);
+              }
+            }
+          }
+        },
+        &cancel);
+  }
+  if (paths.empty())
+  {
+    Toast("No icon found - download a cover first", 1600);
+    return false;
+  }
+
+  const int count = static_cast<int>(paths.size());
+  const int columns = std::max(1, std::min(count, 5));
+  const int rows = (count + columns - 1) / columns;
+  constexpr int gap = 24;
+  const int top = TopBarHeight() + 32;
+  const int bottom = m_height - SettingsFooterReserve() - 12;
+  const int cell = std::max(48, std::min({200, (m_width - 96 - (columns - 1) * gap) / columns,
+                                          (bottom - top - (rows - 1) * gap) / rows}));
+  const int x0 = (m_width - (columns * cell + (columns - 1) * gap)) / 2;
+  const int y0 = top + std::max(0, (bottom - top - rows * cell - (rows - 1) * gap) / 2);
+  std::vector<SDL_Texture*> textures(count, nullptr);
+  for (int index = 0; index < count; ++index)
+    textures[index] = LoadScaledTexture(paths[index], cell, cell);
+  int selection = 0;
+  int chosen = -1;
+  bool done = false;
+  BeginScreenFx();
+  while (!done && BeginFrame())
+  {
+    SDL_Event event{};
+    while (PollEvent(&event))
+    {
+      int touch_x = 0;
+      int touch_y = 0;
+      const TouchKind touch = FeedTouch(event, &touch_x, &touch_y);
+      if (touch == TouchKind::ScrollUp)
+      {
+        selection = std::min(count - 1, selection + columns);
+        continue;
+      }
+      if (touch == TouchKind::ScrollDown)
+      {
+        selection = std::max(0, selection - columns);
+        continue;
+      }
+      if (touch == TouchKind::Tap)
+      {
+        if (touch_y >= m_height - 40)
+        {
+          done = true;
+          continue;
+        }
+        for (int index = 0; index < count; ++index)
+        {
+          const int row = index / columns;
+          const int column = index % columns;
+          const int x = x0 + column * (cell + gap);
+          const int y = y0 + row * (cell + gap);
+          if (touch_x >= x && touch_x < x + cell && touch_y >= y && touch_y < y + cell)
+          {
+            selection = index;
+            chosen = index;
+            done = true;
+            break;
+          }
+        }
+        continue;
+      }
+      if (event.type == SDL_KEYDOWN)
+      {
+        if (event.key.keysym.sym == SDLK_RIGHT)
+          selection = (selection + 1) % count;
+        else if (event.key.keysym.sym == SDLK_LEFT)
+          selection = (selection + count - 1) % count;
+        else if (event.key.keysym.sym == SDLK_DOWN)
+          selection = (selection + columns) % count;
+        else if (event.key.keysym.sym == SDLK_UP)
+          selection = (selection - columns + count) % count;
+        else if (event.key.keysym.sym == SDLK_RETURN)
+        {
+          chosen = selection;
+          done = true;
+        }
+        else if (event.key.keysym.sym == SDLK_ESCAPE)
+          done = true;
+      }
+      if (event.type != SDL_CONTROLLERBUTTONDOWN)
+        continue;
+      if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT)
+        selection = (selection + 1) % count;
+      else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT)
+        selection = (selection + count - 1) % count;
+      else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+        selection = (selection + columns) % count;
+      else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP)
+        selection = (selection - columns + count) % count;
+      else if (event.cbutton.button == BUTTON_CONFIRM)
+      {
+        chosen = selection;
+        done = true;
+      }
+      else if (event.cbutton.button == BUTTON_CANCEL)
+        done = true;
+    }
+
+    ClearBackground();
+    DrawHeader("Choose an icon", game->title);
+    for (int index = 0; index < count; ++index)
+    {
+      const int row = index / columns;
+      const int column = index % columns;
+      const int x = x0 + column * (cell + gap);
+      const int y = y0 + row * (cell + gap);
+      if (index == selection)
+        RoundedPanel(x - 8, y - 8, cell + 16, cell + 16, m_panel, m_selection);
+      else
+        GlassPanel(x - 8, y - 8, cell + 16, cell + 16);
+      FillRect(x, y, cell, cell, m_card);
+      if (textures[index])
+      {
+        SDL_Rect destination{x, y, cell, cell};
+        SDL_RenderCopy(m_renderer, textures[index], nullptr, &destination);
+      }
+      else
+      {
+        DrawTextCentered(m_font_small, x + cell / 2, y + cell / 2, "?", m_dim);
+      }
+    }
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 2> footer = {
+        std::pair{"A", "Use icon"}, std::pair{"B", "Back"}};
+    DrawFooter(footer);
+    DrawFadeIn();
+    SDL_RenderPresent(m_renderer);
+    WaitForNextFrame();
+  }
+  for (SDL_Texture* texture : textures)
+  {
+    if (texture)
+      SDL_DestroyTexture(texture);
+  }
+  if (chosen < 0 || chosen >= count)
+    return false;
+  *output_path = paths[chosen];
+  return true;
+}
+
+void Launcher::CreateHomeShortcut(Game* game)
+{
+  if (!game)
+    return;
+  const GameDetailLayout layout = ComputeGameDetailLayout();
+  constexpr int icon_size = 260;
+  const int icon_x = layout.preview.x + (layout.preview.w - icon_size) / 2;
+  const int icon_y = layout.preview.y + (layout.preview.h - icon_size) / 2;
+  constexpr int panel_height = 340;
+  const SDL_Rect panel{layout.content.x, layout.content.y + (layout.content.h - panel_height) / 2,
+                       layout.content.w, panel_height};
+  const int right_x = panel.x + 24;
+  const int right_width = panel.w - 48;
+  const int name_y = panel.y + 32;
+  const int author_y = panel.y + 126;
+  const int create_y = panel.y + 240;
+  constexpr int field_height = 86;
+  constexpr int create_height = 68;
+  std::string name = game->title;
+  std::string author =
+      game->metadata ?
+          game->metadata->GetMaker() :
+          std::string{};
+  if (author.empty())
+    author = "Thorhax";
+  std::string icon_path = CoverPath(*game);
+  if (!RegularFileExists(icon_path))
+    icon_path = "romfs:/fwd/icon.jpg";
+  SDL_Texture* icon = LoadScaledTexture(icon_path, icon_size, icon_size);
+  int selection = 0;
+  bool done = false;
+
+  const auto edit = [&](std::string_view title, std::string* value) {
+    std::string replacement;
+    if (PromptText(title, *value, &replacement, false, false) && !replacement.empty())
+      *value = std::move(replacement);
+  };
+  const auto build = [&] {
+    if (icon_path.empty())
+    {
+      Toast("Pick an icon first", 1200);
+      return;
+    }
+    std::array<char, 512> error{};
+    bool created = false;
+    std::vector<std::string> legacy_game_paths;
+    if (!game->installed_nand)
+    {
+      const auto identity =
+          std::ranges::find(m_library_identities, game->key, &LibraryIdentityRecord::id);
+      if (identity != m_library_identities.end())
+        legacy_game_paths = identity->previous_paths;
+      // The installed shortcut immediately depends on this launcher.ini record. Commit it before
+      // making the external HOME Menu mutation so a crash or power loss cannot leave a shortcut
+      // referring to a progressive-scan identity which only existed in memory.
+      if (m_library_identities_dirty)
+        SaveLibraryIdentities();
+      FlushPendingSaves();
+    }
+    RunBusyTask("Creating HOME shortcut", game->title, [&] {
+      created = game->installed_nand ?
+                    Forwarder::CreateNANDTitle(game->title_id, name, author, icon_path, game->key,
+                                               error.data(), error.size()) :
+                    Forwarder::Create(game->path, name, author, icon_path,
+                                      game->config_override_path, game->key, legacy_game_paths,
+                                      error.data(), error.size());
+    });
+    if (created)
+    {
+      Toast("HOME shortcut installed", 1800);
+      done = true;
+    }
+    else
+    {
+      RenderMessage("Shortcut failed",
+                    std::array<std::string, 1>{error[0] ? error.data() : "Unknown error"});
+    }
+    BeginScreenFx();
+  };
+  const auto activate = [&] {
+    if (selection == 0)
+    {
+      std::string selected_path;
+      if (ChooseForwarderIcon(game, &selected_path))
+      {
+        icon_path = std::move(selected_path);
+        if (icon)
+          SDL_DestroyTexture(icon);
+        icon = LoadScaledTexture(icon_path, icon_size, icon_size);
+      }
+      BeginScreenFx();
+    }
+    else if (selection == 1)
+    {
+      edit("Shortcut name", &name);
+      BeginScreenFx();
+    }
+    else if (selection == 2)
+    {
+      edit("Author", &author);
+      BeginScreenFx();
+    }
+    else
+    {
+      build();
+    }
+  };
+
+  BeginScreenFx();
+  while (!done && BeginFrame())
+  {
+    SDL_Event event{};
+    while (PollEvent(&event))
+    {
+      int touch_x = 0;
+      int touch_y = 0;
+      const TouchKind touch = FeedTouch(event, &touch_x, &touch_y);
+      if (touch == TouchKind::Tap)
+      {
+        if (touch_x >= icon_x && touch_x < icon_x + icon_size && touch_y >= icon_y &&
+            touch_y < icon_y + icon_size)
+        {
+          selection = 0;
+          activate();
+        }
+        else if (touch_x >= right_x - 10 && touch_x < right_x + right_width + 10 &&
+                 touch_y >= name_y - 6 && touch_y < name_y - 6 + field_height)
+        {
+          selection = 1;
+          activate();
+        }
+        else if (touch_x >= right_x - 10 && touch_x < right_x + right_width + 10 &&
+                 touch_y >= author_y - 6 && touch_y < author_y - 6 + field_height)
+        {
+          selection = 2;
+          activate();
+        }
+        else if (touch_x >= right_x - 10 && touch_x < right_x + right_width + 10 &&
+                 touch_y >= create_y - 6 && touch_y < create_y - 6 + create_height)
+        {
+          selection = 3;
+          activate();
+        }
+        else if (touch_y >= m_height - 40)
+        {
+          done = true;
+        }
+        continue;
+      }
+      if (event.type == SDL_KEYDOWN)
+      {
+        if (event.key.keysym.sym == SDLK_LEFT)
+          selection = 0;
+        else if (event.key.keysym.sym == SDLK_RIGHT && selection == 0)
+          selection = 1;
+        else if (event.key.keysym.sym == SDLK_UP)
+          selection = selection == 0 ? 3 : (selection == 1 ? 3 : selection - 1);
+        else if (event.key.keysym.sym == SDLK_DOWN)
+          selection = selection == 0 ? 1 : (selection == 3 ? 1 : selection + 1);
+        else if (event.key.keysym.sym == SDLK_RETURN)
+          activate();
+        else if (event.key.keysym.sym == SDLK_ESCAPE)
+          done = true;
+      }
+      if (event.type != SDL_CONTROLLERBUTTONDOWN)
+        continue;
+      if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT)
+        selection = 0;
+      else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT && selection == 0)
+        selection = 1;
+      else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP)
+        selection = selection == 0 ? 3 : (selection == 1 ? 3 : selection - 1);
+      else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+        selection = selection == 0 ? 1 : (selection == 3 ? 1 : selection + 1);
+      else if (event.cbutton.button == BUTTON_CONFIRM)
+        activate();
+      else if (event.cbutton.button == BUTTON_CANCEL)
+        done = true;
+    }
+
+    ClearBackground();
+    DrawHeader("Create HOME shortcut", game->title);
+    DrawArtworkPreview(icon, SDL_Rect{icon_x, icon_y, icon_size, icon_size}, selection == 0,
+                       "(no icon)");
+    DrawTextCentered(m_font_small, icon_x + icon_size / 2, icon_y + icon_size + 20,
+                     m_localization.Translate("Icon"), selection == 0 ? m_value : m_dim);
+    GlassPanel(panel.x, panel.y, panel.w, panel.h);
+    const auto field = [&](int index, int y, std::string_view label, std::string_view value) {
+      const bool current = selection == index;
+      RoundedRect(right_x - 10, y - 6, right_width + 20, field_height, 4, m_card);
+      if (current)
+        DrawRowHighlight(right_x - 10, y - 6, right_width + 20, field_height);
+      DrawText(m_font_small, right_x + 8, y + 4, label, m_highlight);
+      DrawScrollingTextLeft(m_font, right_x + 8, y + 34, right_width - 16, value,
+                            current ? m_value : m_text);
+    };
+    field(1, name_y, m_localization.Translate("Name"), name);
+    const std::string metadata =
+        author + "  |  v" YAB_NX_RELEASE_VERSION;
+    field(2, author_y, m_localization.Translate("Author / Version"), metadata);
+    const bool create_selected = selection == 3;
+    DrawButtonPanel(right_x - 10, create_y - 6, right_width + 20, create_height, create_selected);
+    DrawTextCentered(m_font, right_x + right_width / 2,
+                     create_y - 6 + (create_height - FontHeight(m_font)) / 2,
+                     m_localization.Translate("Create shortcut"),
+                     create_selected ? m_value : m_text);
+    const std::array<std::pair<std::string_view, std::string_view>, 2> footer = {
+        std::pair<std::string_view, std::string_view>{
+            "A", create_selected ? "Create shortcut" : "Edit / choose"},
+        std::pair<std::string_view, std::string_view>{"B", "Back"}};
+    DrawFooter(footer);
+    DrawFadeIn();
+    SDL_RenderPresent(m_renderer);
+    WaitForNextFrame();
+  }
+  if (icon)
+    SDL_DestroyTexture(icon);
+}
+
+bool Launcher::EditSmbShare(Storage::SmbShare* share, bool creating)
+{
+  if (!share)
+    return false;
+  Storage::SmbShare edited = *share;
+  constexpr int field_count = 7;
+  constexpr int save_row = 7;
+  constexpr int total_rows = 8;
+  int selection = 0;
+  bool done = false;
+  bool saved = false;
+
+  const auto clean_server = [&] {
+    edited.server = Trim(edited.server);
+    if (Lower(edited.server).starts_with("smb://"))
+      edited.server.erase(0, 6);
+    while (!edited.server.empty() && edited.server.back() == '/')
+      edited.server.pop_back();
+  };
+  const auto clean_share = [&] {
+    std::string combined = Trim(edited.share);
+    if (!edited.path.empty())
+      combined += "/" + edited.path;
+    std::ranges::replace(combined, '\\', '/');
+    while (!combined.empty() && combined.front() == '/')
+      combined.erase(combined.begin());
+    while (!combined.empty() && combined.back() == '/')
+      combined.pop_back();
+    std::string normalized;
+    bool slash = false;
+    for (const char value : combined)
+    {
+      if (value == '/')
+      {
+        if (slash)
+          continue;
+        slash = true;
+      }
+      else
+      {
+        slash = false;
+      }
+      normalized += value;
+    }
+    const std::size_t separator = normalized.find('/');
+    edited.share = Trim(normalized.substr(0, separator));
+    edited.path =
+        separator == std::string::npos ? std::string{} : Trim(normalized.substr(separator + 1));
+  };
+  const auto shared_folder = [&] {
+    return edited.path.empty() ? edited.share : edited.share + "/" + edited.path;
+  };
+  const auto validate = [&] {
+    edited.name = Trim(edited.name);
+    clean_server();
+    clean_share();
+    if (edited.name.empty())
+    {
+      RenderMessage(
+          "Display name required",
+          std::array<std::string, 1>{"Enter a name used to identify this share in the launcher."}, true);
+      return false;
+    }
+    if (edited.server.empty() || edited.server.find('/') != std::string::npos ||
+        edited.server.find('\\') != std::string::npos)
+    {
+      RenderMessage("Invalid SMB server",
+                    std::array<std::string, 2>{"Enter only a host name or IP address.",
+                                               "Example: 192.168.1.20"},
+                    true);
+      return false;
+    }
+    bool invalid_path = edited.share.empty() || edited.share.find(':') != std::string::npos;
+    std::size_t start = 0;
+    while (!invalid_path && start <= edited.path.size())
+    {
+      const std::size_t slash = edited.path.find('/', start);
+      const std::string component = Trim(edited.path.substr(
+          start, slash == std::string::npos ? std::string::npos : slash - start));
+      if ((!edited.path.empty() && component.empty()) || component == "." || component == ".." ||
+          component.find(':') != std::string::npos)
+        invalid_path = true;
+      if (slash == std::string::npos)
+        break;
+      start = slash + 1;
+    }
+    if (invalid_path)
+    {
+      RenderMessage(
+          "Invalid SMB share",
+          std::array<std::string, 2>{"Enter a share name, optionally followed by folders.",
+                                     "Do not include a drive letter or smb:// prefix."},
+          true);
+      return false;
+    }
+    return true;
+  };
+  const auto edit_field = [&](int index) {
+    std::string value;
+    bool accepted = false;
+    if (index == 0)
+      accepted = PromptText("SMB display name", edited.name, &value, false, false,
+                            "Friendly name shown in the file browser.",
+                            "Example: Living room NAS");
+    else if (index == 1)
+      accepted = PromptText("Server or IP address", edited.server, &value, false, false,
+                            "Host only; do not include smb:// or a folder.",
+                            "Example: 192.168.1.20 or NAS.local");
+    else if (index == 2)
+      accepted = PromptText("Shared folder", shared_folder(), &value, false, false,
+                            "Enter the share and an optional folder path inside it.",
+                            "Nested folders are supported");
+    else if (index == 3)
+      accepted = PromptText("Username", edited.user, &value, false, true,
+                            "Leave blank for guest access.", "Leave blank for guest");
+    else if (index == 4)
+      accepted = PromptText("Password", edited.password, &value, true, true,
+                            "Stored in launcher.ini; leave blank when not required.",
+                            "Leave blank when no password is required");
+    else if (index == 5)
+      accepted =
+          PromptText("Workgroup", edited.domain, &value, false, true,
+                     "Usually optional on a home network.", "Example: WORKGROUP, or leave blank");
+    if (!accepted)
+      return;
+    if (index == 0)
+      edited.name = value;
+    else if (index == 1)
+    {
+      edited.server = value;
+      clean_server();
+    }
+    else if (index == 2)
+    {
+      edited.share = value;
+      edited.path.clear();
+      clean_share();
+    }
+    else if (index == 3)
+      edited.user = value;
+    else if (index == 4)
+      edited.password = value;
+    else if (index == 5)
+      edited.domain = value;
+    BeginScreenFx();
+  };
+  const auto activate = [&] {
+    if (selection < 6)
+    {
+      edit_field(selection);
+    }
+    else if (selection == 6)
+    {
+      edited.auto_mount = !edited.auto_mount;
+    }
+    else if (validate())
+    {
+      if (creating || edited.id.empty())
+      {
+        std::unordered_set<std::string> ids;
+        for (const Storage::SmbShare& existing : m_shares)
+          ids.insert(existing.id);
+        std::uint64_t seed = armGetSystemTick();
+        do
+        {
+          char id[17];
+          std::snprintf(id, sizeof(id), "%08llx",
+                        static_cast<unsigned long long>(seed & 0xffffffffULL));
+          edited.id = id;
+          seed = seed * 6364136223846793005ULL + 1;
+        } while (ids.contains(edited.id));
+      }
+      *share = std::move(edited);
+      saved = true;
+      done = true;
+    }
+  };
+
+  BeginScreenFx();
+  while (!done && BeginFrame())
+  {
+    SDL_Event event{};
+    while (PollEvent(&event))
+    {
+      int touch_x = 0;
+      int touch_y = 0;
+      const TouchKind touch = FeedTouch(event, &touch_x, &touch_y);
+      const int scale = 2;
+      const int row_height = 27 * scale;
+      const int y0 = TopBarHeight() + 26;
+      const int margin = 56;
+      const int help_width = 420;
+      const int gap = 28;
+      const int form_width = m_width - margin * 2 - help_width - gap;
+      if (touch == TouchKind::Tap)
+      {
+        if (touch_y >= m_height - 42)
+        {
+          done = true;
+          continue;
+        }
+        for (int index = 0; index < field_count; ++index)
+        {
+          if (touch_x >= margin && touch_x < margin + form_width &&
+              touch_y >= y0 + index * row_height && touch_y < y0 + (index + 1) * row_height)
+          {
+            selection = index;
+            activate();
+            break;
+          }
+        }
+        const int button_y = y0 + field_count * row_height + 10;
+        if (touch_x >= margin && touch_x < margin + form_width && touch_y >= button_y &&
+            touch_y < button_y + row_height)
+        {
+          selection = save_row;
+          activate();
+        }
+        continue;
+      }
+      if (event.type == SDL_KEYDOWN)
+      {
+        if (event.key.keysym.sym == SDLK_UP)
+          selection = (selection + total_rows - 1) % total_rows;
+        else if (event.key.keysym.sym == SDLK_DOWN)
+          selection = (selection + 1) % total_rows;
+        else if ((event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT) &&
+                 selection == 6)
+          edited.auto_mount = !edited.auto_mount;
+        else if (event.key.keysym.sym == SDLK_RETURN)
+          activate();
+        else if (event.key.keysym.sym == SDLK_ESCAPE)
+          done = true;
+      }
+      if (event.type != SDL_CONTROLLERBUTTONDOWN)
+        continue;
+      if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP)
+        selection = (selection + total_rows - 1) % total_rows;
+      else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+        selection = (selection + 1) % total_rows;
+      else if ((event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
+                event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) &&
+               selection == 6)
+        edited.auto_mount = !edited.auto_mount;
+      else if (event.cbutton.button == BUTTON_CONFIRM)
+        activate();
+      else if (event.cbutton.button == BUTTON_CANCEL)
+        done = true;
+    }
+
+    ClearBackground();
+    DrawHeader(creating ? "Add SMB network share" : "Edit SMB network share", edited.name);
+    const int scale = 2;
+    const int row_height = 27 * scale;
+    const int y0 = TopBarHeight() + 26;
+    const int margin = 56;
+    const int help_width = 420;
+    const int gap = 28;
+    const int form_width = m_width - margin * 2 - help_width - gap;
+    const int help_x = margin + form_width + gap;
+    const int panel_height = field_count * row_height + row_height + 30;
+    GlassPanel(margin, y0 - 10, form_width, panel_height);
+    GlassPanel(help_x, y0 - 10, help_width, panel_height);
+    static constexpr std::array<std::string_view, field_count> labels = {
+        "Display name", "Server / IP address", "Shared folder",     "Username",
+        "Password",     "Workgroup",           "Connect at startup"};
+    const std::string password =
+        edited.password.empty() ?
+            std::string(m_localization.Translate("Not set")) :
+            std::string(std::min<std::size_t>(16, edited.password.size()), '*');
+    const std::array<std::string, field_count> values = {
+        edited.name.empty() ? std::string(m_localization.Translate("Not set")) : edited.name,
+        edited.server.empty() ? std::string(m_localization.Translate("Not set")) : edited.server,
+        edited.share.empty() ? std::string(m_localization.Translate("Not set")) : shared_folder(),
+        edited.user.empty() ? std::string(m_localization.Translate("Guest")) : edited.user,
+        password,
+        edited.domain.empty() ? std::string(m_localization.Translate("Optional")) : edited.domain,
+        std::string(m_localization.Translate(edited.auto_mount ? "On" : "Off"))};
+    for (int index = 0; index < field_count; ++index)
+    {
+      const int y = y0 + index * row_height;
+      const bool current = selection == index;
+      if (current)
+      {
+        DrawRowHighlight(margin + 8, y, form_width - 16, row_height - 2);
+      }
+      DrawText(m_font_small, margin + 30, y + (row_height - FontHeight(m_font_small)) / 2,
+               m_localization.Translate(labels[index]), current ? m_value : m_dim);
+      DrawScrollingTextRight(m_font, margin + form_width - 24,
+                             y + (row_height - FontHeight(m_font)) / 2, form_width / 2 - 30,
+                             values[index], current ? m_value : m_text);
+    }
+    const int button_y = y0 + field_count * row_height + 10;
+    const bool button_selected = selection == save_row;
+    DrawButtonPanel(margin + 14, button_y, form_width - 28, row_height - 4, button_selected);
+    DrawTextCentered(m_font, margin + form_width / 2,
+                     button_y + (row_height - FontHeight(m_font)) / 2 - 2,
+                     m_localization.Translate(creating ? "Connect and save" : "Save changes"),
+                     button_selected ? m_value : m_highlight);
+
+    static constexpr std::array<std::string_view, total_rows> help_titles = {
+        "Display name", "Server / IP address", "Shared folder",      "Username",
+        "Password",     "Workgroup",           "Connect at startup", "Save share"};
+    static constexpr std::array<std::string_view, total_rows> help_line_1 = {
+        "A friendly name shown only in the launcher.",
+        "The host name or IP of your SMB server.",
+        "The share name and optional folder path.",
+        "Leave blank when the share allows guests.",
+        "The password for the selected account.",
+        "Usually optional on home networks.",
+        "Reconnect this share when the launcher opens.",
+        "Validate the fields and connect to the share."};
+    static constexpr std::array<std::string_view, total_rows> help_line_2 = {
+        "Example: Living room NAS",
+        "Example: 192.168.1.20 or NAS.local",
+        "Nested folders are supported.",
+        "Use the account configured on your NAS or PC.",
+        "The value is masked on this screen.",
+        "Example: WORKGROUP",
+        "Turn this off for manually connected shares.",
+        "Connection errors will be shown after saving."};
+    DrawText(m_font_large, help_x + 28, y0 + 22, m_localization.Translate(help_titles[selection]),
+             m_highlight);
+    const int help_line_height = FontHeight(m_font_small) + 4;
+    DrawWrapped(m_font_small, help_x + 28, y0 + 92, help_width - 56, help_line_height, 2,
+                m_localization.Translate(help_line_1[selection]), m_text);
+    DrawWrapped(m_font_small, help_x + 28, y0 + 156, help_width - 56, help_line_height, 2,
+                m_localization.Translate(help_line_2[selection]), m_dim);
+    const std::string address =
+        "smb://" + (edited.server.empty() ? std::string("server") : edited.server) + "/" +
+        (edited.share.empty() ? std::string("share") : shared_folder());
+    DrawText(m_font_small, help_x + 28, y0 + 210, m_localization.Translate("Connection preview"),
+             m_dim);
+    DrawScrollingTextLeft(m_font, help_x + 28, y0 + 244, help_width - 56, address, m_value);
+    const std::array<std::pair<std::string_view, std::string_view>, 2> hints = {
+        std::pair<std::string_view, std::string_view>{
+            "A", button_selected ? (creating ? "Connect and save" : "Save changes") :
+                                   "Edit / toggle"},
+        std::pair<std::string_view, std::string_view>{"B", "Cancel"}};
+    DrawFooter(hints);
+    DrawFadeIn();
+    SDL_RenderPresent(m_renderer);
+    WaitForNextFrame();
+  }
+  return saved;
+}
+
+void Launcher::NetworkSharesScreen()
+{
+  // Do not let an automatic mount worker replace a devoptab registration while this screen is
+  // editing it. The worker is joined once here; individual connect operations below remain
+  // asynchronous and keep the UI responsive.
+  StopAutoMountShares();
+  // Stopping the startup worker here used to permanently abandon every share it had not reached
+  // yet.  Re-evaluate the saved auto-mount set on every exit path (including touch/back returns),
+  // after any edits made on this screen have been committed.
+  Common::ScopeGuard restart_auto_mounts([this] {
+    if (!m_shutdown)
+      StartAutoMountShares();
+  });
+  int selection = 0;
+  int top = 0;
+  const int list_y = SettingsListY();
+  constexpr int row_height = 60;
+  BeginScreenFx();
+  while (BeginFrame())
+  {
+    const int count = 1 + static_cast<int>(m_shares.size());
+    const int visible =
+        std::max(1, (m_height - list_y - SettingsFooterReserve()) / row_height);
+    selection = std::clamp(selection, 0, count - 1);
+    if (selection < top)
+      top = selection;
+    if (selection >= top + visible)
+      top = selection - visible + 1;
+    bool rebuild = false;
+    SDL_Event event{};
+    while (PollEvent(&event))
+    {
+      int touch_x = 0;
+      int touch_y = 0;
+      const TouchKind touch = FeedTouch(event, &touch_x, &touch_y);
+      if (TouchScrollList(touch, &selection, &top, count, visible))
+        continue;
+      if (touch == TouchKind::Tap)
+      {
+        if (touch_y >= m_height - 48)
+          return;
+        for (int row = 0; row < visible && top + row < count; ++row)
+        {
+          const int y = list_y + row * row_height;
+          if (touch_y >= y && touch_y < y + row_height - 4)
+          {
+            selection = top + row;
+            SDL_Event press{};
+            press.type = SDL_CONTROLLERBUTTONDOWN;
+            press.cbutton.button = BUTTON_CONFIRM;
+            SDL_PushEvent(&press);
+            break;
+          }
+        }
+        continue;
+      }
+      const int direction = EventNavigation(event);
+      if (direction)
+        selection = (selection + direction + count) % count;
+      const bool confirm =
+          (event.type == SDL_CONTROLLERBUTTONDOWN && event.cbutton.button == BUTTON_CONFIRM) ||
+          (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_RETURN);
+      const bool cancel =
+          (event.type == SDL_CONTROLLERBUTTONDOWN && event.cbutton.button == BUTTON_CANCEL) ||
+          (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE);
+      if (cancel)
+        return;
+      if (!confirm)
+        continue;
+      if (selection == 0)
+      {
+        if (m_shares.size() >= 8)
+        {
+          Toast("Maximum of 8 SMB shares", 1000);
+          continue;
+        }
+        Storage::SmbShare new_share;
+        if (EditSmbShare(&new_share, true))
+        {
+          m_shares.push_back(new_share);
+          SaveShares();
+          FlushPendingSaves();
+          std::string error;
+          std::atomic_bool cancel_mount{false};
+          bool mounted = false;
+          RunBusyTask(
+              "Connecting SMB share", new_share.name,
+              [&] { mounted = Storage::MountSmb(new_share, &error, &cancel_mount); },
+              &cancel_mount);
+          if (mounted)
+          {
+            const std::string root = Storage::SmbRootPath(new_share.id);
+            for (const std::string& source : m_sources)
+              if (PathAtOrBelow(source, root))
+                m_pending_scan_sources.push_back(source);
+          }
+          if (!mounted && !cancel_mount.load(std::memory_order_acquire))
+            RenderMessage("SMB connection failed", std::array<std::string, 1>{error});
+          selection = static_cast<int>(m_shares.size());
+          rebuild = true;
+        }
+      }
+      else
+      {
+        const int share_index = selection - 1;
+        Storage::SmbShare& selected_share = m_shares[share_index];
+        const bool mounted = Storage::IsSmbMounted(selected_share.id);
+        const int choice = Dropdown(
+            selected_share.name.empty() ? selected_share.share : selected_share.name,
+            {mounted ? "Disconnect" : "Connect", "Edit", "Toggle connect at startup", "Remove"}, -1,
+            false, true);
+        if (choice == 0)
+        {
+          if (mounted)
+          {
+            StopGameScan();
+            Storage::UnmountSmb(selected_share.id);
+            m_library_refresh_requested = true;
+          }
+          else
+          {
+            std::string error;
+            std::atomic_bool cancel_mount{false};
+            bool connected = false;
+            RunBusyTask(
+                "Connecting SMB share", selected_share.name,
+                [&] { connected = Storage::MountSmb(selected_share, &error, &cancel_mount); },
+                &cancel_mount);
+            if (connected)
+            {
+              const std::string root = Storage::SmbRootPath(selected_share.id);
+              for (const std::string& source : m_sources)
+                if (PathAtOrBelow(source, root))
+                  m_pending_scan_sources.push_back(source);
+            }
+            if (!connected && !cancel_mount.load(std::memory_order_acquire))
+              RenderMessage("SMB connection failed", std::array<std::string, 1>{error});
+          }
+          rebuild = true;
+        }
+        else if (choice == 1)
+        {
+          Storage::SmbShare edited_share = selected_share;
+          if (EditSmbShare(&edited_share, false))
+          {
+            const bool reconnect = mounted || edited_share.auto_mount;
+            StopGameScan();
+            Storage::UnmountSmb(selected_share.id);
+            m_library_refresh_requested = true;
+            selected_share = std::move(edited_share);
+            SaveShares();
+            FlushPendingSaves();
+            if (reconnect)
+            {
+              std::string error;
+              std::atomic_bool cancel_mount{false};
+              bool connected = false;
+              RunBusyTask(
+                  "Reconnecting SMB share", selected_share.name,
+                  [&] { connected = Storage::MountSmb(selected_share, &error, &cancel_mount); },
+                  &cancel_mount);
+              if (connected)
+              {
+                const std::string root = Storage::SmbRootPath(selected_share.id);
+                for (const std::string& source : m_sources)
+                  if (PathAtOrBelow(source, root))
+                    m_pending_scan_sources.push_back(source);
+              }
+              if (!connected && !cancel_mount.load(std::memory_order_acquire))
+                RenderMessage("SMB connection failed", std::array<std::string, 1>{error});
+            }
+            rebuild = true;
+          }
+        }
+        else if (choice == 2)
+        {
+          selected_share.auto_mount = !selected_share.auto_mount;
+          SaveShares();
+          FlushPendingSaves();
+          rebuild = true;
+        }
+        else if (choice == 3 &&
+                 Confirm("Remove SMB share?",
+                         std::array<std::string, 3>{
+                             selected_share.name, "",
+                             std::string(m_localization.Translate(
+                                 "Saved folders on this share will also be removed."))}))
+        {
+          const std::string root = Storage::SmbRootPath(selected_share.id);
+          StopGameScan();
+          Storage::UnmountSmb(selected_share.id);
+          m_library_refresh_requested = true;
+          m_shares.erase(m_shares.begin() + share_index);
+          SaveShares();
+          FlushPendingSaves();
+          RemoveSavedPathsBelow(root);
+          selection = std::max(0, selection - 1);
+          rebuild = true;
+        }
+      }
+      if (rebuild)
+        break;
+    }
+    if (rebuild)
+    {
+      BeginScreenFx();
+      continue;
+    }
+
+    ClearBackground();
+    const std::string summary = std::to_string(m_shares.size()) + " " +
+                                std::string(m_localization.Translate(
+                                    m_shares.size() == 1 ? "saved share" : "saved shares"));
+    DrawHeader("SMB network shares", summary);
+    GlassPanel(44, list_y - 13, m_width - 88,
+               std::min(visible, count - top) * row_height + 18);
+    for (int row = 0; row < visible && top + row < count; ++row)
+    {
+      const int index = top + row;
+      const int y = list_y + row * row_height;
+      const bool current = index == selection;
+      if (current)
+      {
+        DrawRowHighlight(56, y - 3, m_width - 112, row_height - 4);
+      }
+      if (index == 0)
+      {
+        DrawText(m_font, 82, y + (row_height - FontHeight(m_font)) / 2 - 2,
+                 m_localization.Translate("[ Add SMB share ]"), current ? m_value : m_highlight);
+      }
+      else
+      {
+        const Storage::SmbShare& item = m_shares[index - 1];
+        const bool mounted = Storage::IsSmbMounted(item.id);
+        DrawText(m_font, 82, y, item.name, current ? m_value : m_text);
+        const Storage::SmbConnectionState connection_state =
+            Storage::GetSmbConnectionState(item.id);
+        const std::string status =
+            connection_state == Storage::SmbConnectionState::Connecting   ? "Connecting..." :
+            connection_state == Storage::SmbConnectionState::Reconnecting ? "Reconnecting..." :
+            connection_state == Storage::SmbConnectionState::Failed       ? "Connection failed" :
+            mounted                                                       ? "Connected" :
+                      (item.auto_mount ? "Disconnected - auto" : "Disconnected");
+        DrawTextRight(m_font_small, m_width - 82, y + 4, m_localization.Translate(status),
+                      mounted ? SDL_Color{120, 220, 120, 255} : m_dim);
+        const std::string address = "smb://" + item.server + "/" + item.share +
+                                    (item.path.empty() ? std::string{} : "/" + item.path);
+        DrawText(m_font_small, 82, y + 31, Ellipsize(m_font_small, address, m_width - 340), m_dim);
+      }
+    }
+    DrawSettingsFooter("A  Select       B  Back");
+    DrawFadeIn();
+    SDL_RenderPresent(m_renderer);
+    WaitForNextFrame();
+  }
+}
+
+void Launcher::DownloadCovers()
+{
+  const std::string api_key = Trim(m_store.Get("Network/SteamGridDBKey"));
+  if (!m_cover_download_ready || api_key.empty())
+  {
+    RenderMessage("Cover download unavailable",
+                  std::array<std::string, 2>{"A SteamGridDB API key is required.",
+                                             "Configure it in Settings > Launcher."},
+                  true);
+    return;
+  }
+  struct MissingCover
+  {
+    std::string key;
+    std::string title;
+    std::string path;
+  };
+  std::vector<MissingCover> missing;
+  for (const Game& game : m_games)
+  {
+    const std::string path = CoverPath(game);
+    if (!RegularFileExists(path))
+      missing.push_back({game.key, game.title, path});
+  }
+  if (missing.empty())
+  {
+    Toast("Every game already has a cover", 1000);
+    return;
+  }
+  if (!Confirm("Download covers?",
+               std::array<std::string, 2>{std::to_string(missing.size()) + " " +
+                                              std::string(m_localization.Translate("games")),
+                                          std::string(m_localization.Translate(
+                                              "Press B while downloading to cancel safely."))}))
+    return;
+
+  std::atomic_bool cancel{false};
+  std::atomic<int> downloaded{0};
+  std::atomic<int> failed{0};
+  std::vector<std::string> downloaded_keys;
+  downloaded_keys.reserve(missing.size());
+  const auto task = [&] {
+    CoverDownload::RequestOptions options;
+    options.cancel = &cancel;
+    for (const MissingCover& item : missing)
+    {
+      if (cancel.load(std::memory_order_acquire))
+        break;
+      const CoverDownload::Result result =
+          CoverDownload::DownloadBestCover(api_key, item.title, item.path, nullptr, &options);
+      if (result == CoverDownload::Result::Ok)
+      {
+        downloaded.fetch_add(1, std::memory_order_relaxed);
+        downloaded_keys.emplace_back(item.key);
+      }
+      else if (result != CoverDownload::Result::Cancelled)
+        failed.fetch_add(1, std::memory_order_relaxed);
+    }
+  };
+  RunBusyTask("Downloading covers", std::to_string(missing.size()) + " games queued", task,
+              &cancel);
+  const std::unordered_set<std::string> downloaded_set(downloaded_keys.begin(),
+                                                       downloaded_keys.end());
+  for (Game& game : m_games)
+  {
+    if (!downloaded_set.contains(game.key))
+      continue;
+    if (game.cover)
+      SDL_DestroyTexture(game.cover);
+    game.cover = nullptr;
+    game.cover_use = 0;
+    game.cover_loaded_at = 0;
+    game.cover_attempted = false;
+  }
+  if (cancel.load(std::memory_order_acquire))
+    Toast("Cover download cancelled", 1000);
+  else
+    RenderMessage("Cover download complete",
+                  std::array<std::string, 2>{
+                      std::to_string(downloaded.load()) + " " +
+                          std::string(m_localization.Translate("downloaded")),
+                      std::to_string(failed.load()) + " " +
+                          std::string(m_localization.Translate("not found or failed"))});
+}
+
+int Launcher::ChooseCoverArtwork(const std::vector<CoverDownload::Artwork>& artwork,
+                                 std::string_view game_name)
+{
+  if (artwork.empty())
+    return -1;
+  const GameDetailLayout layout = ComputeGameDetailLayout();
+  const int list_x = layout.content.x;
+  const int list_width = layout.content.w;
+  const int row_height = SettingsRowHeight() + 8;
+  const int start_y = layout.content.y + 44;
+  const int preview_width = layout.preview.w;
+  const int preview_height = layout.preview.h;
+  const int visible = std::max(1, (layout.content.h - 52) / row_height);
+  const std::string temporary = std::string(COVER_DIRECTORY) + "/.sgdb-preview.img";
+  int selection = 0;
+  int top = 0;
+  int loaded = -1;
+  SDL_Texture* preview = nullptr;
+  bool preview_failed = false;
+  const auto release_preview = [&] {
+    if (preview)
+      SDL_DestroyTexture(preview);
+    preview = nullptr;
+    std::remove(temporary.c_str());
+  };
+  const auto load_preview = [&](int index) {
+    release_preview();
+    loaded = index;
+    preview_failed = false;
+    ClearBackground();
+    DrawHeader("Choose cover artwork", game_name);
+    DrawArtworkPreview(nullptr, layout.preview, false, std::string_view{});
+    DrawTextCentered(m_font, layout.preview.x + layout.preview.w / 2, m_height / 2 - 18,
+                     m_localization.Translate("Loading preview..."), m_dim);
+    SDL_RenderPresent(m_renderer);
+    const std::string& url =
+        artwork[index].thumbnail_url.empty() ? artwork[index].url : artwork[index].thumbnail_url;
+    std::atomic_bool cancel{false};
+    CoverDownload::Result result = CoverDownload::Result::Error;
+    CoverDownload::RequestOptions options{&cancel};
+    RunBusyTask(
+        "Loading cover preview", std::string(game_name),
+        [&] { result = CoverDownload::DownloadImage(url, temporary, &options); }, &cancel);
+    if (result == CoverDownload::Result::Ok)
+      preview = LoadScaledTexture(temporary, preview_width, preview_height);
+    preview_failed = preview == nullptr;
+    std::remove(temporary.c_str());
+    BeginScreenFx();
+  };
+
+  EnsureDirectory(COVER_DIRECTORY);
+  load_preview(0);
+  while (BeginFrame())
+  {
+    SDL_Event event{};
+    while (PollEvent(&event))
+    {
+      int touch_x = 0;
+      int touch_y = 0;
+      const TouchKind touch = FeedTouch(event, &touch_x, &touch_y);
+      const int previous_touch_selection = selection;
+      if (TouchScrollList(touch, &selection, &top, static_cast<int>(artwork.size()), visible))
+      {
+        if (selection != previous_touch_selection)
+          load_preview(selection);
+        continue;
+      }
+      if (touch == TouchKind::Tap)
+      {
+        if (touch_y >= m_height - 48)
+        {
+          release_preview();
+          return -1;
+        }
+        if (touch_x >= list_x && touch_x < list_x + list_width)
+        {
+          for (int row = 0; row < visible && top + row < static_cast<int>(artwork.size()); ++row)
+          {
+            const int y = start_y + row * row_height;
+            if (touch_y >= y && touch_y < y + row_height)
+            {
+              selection = top + row;
+              if (loaded != selection)
+                load_preview(selection);
+              break;
+            }
+          }
+        }
+        continue;
+      }
+      const int previous = selection;
+      const int direction = EventNavigation(event);
+      if (direction)
+        selection = (selection + direction + static_cast<int>(artwork.size())) % artwork.size();
+      if ((event.type == SDL_CONTROLLERBUTTONDOWN && event.cbutton.button == BUTTON_CONFIRM) ||
+          (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_RETURN))
+      {
+        release_preview();
+        return selection;
+      }
+      if ((event.type == SDL_CONTROLLERBUTTONDOWN && event.cbutton.button == BUTTON_CANCEL) ||
+          (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE))
+      {
+        release_preview();
+        return -1;
+      }
+      if (selection < top)
+        top = selection;
+      if (selection >= top + visible)
+        top = selection - visible + 1;
+      if (selection != previous)
+        load_preview(selection);
+    }
+
+    ClearBackground();
+    DrawHeader("Choose cover artwork", game_name);
+    DrawSectionHeading("Online artwork", list_x, start_y - 44, list_width);
+    GlassPanel(list_x - 8, start_y - 8, list_width + 16,
+               std::min(visible, static_cast<int>(artwork.size())) * row_height + 16);
+    for (int row = 0; row < visible && top + row < static_cast<int>(artwork.size()); ++row)
+    {
+      const int index = top + row;
+      const int y = start_y + row * row_height;
+      const int text_y = y + (row_height - FontHeight(m_font)) / 2;
+      const bool current = index == selection;
+      if (current)
+      {
+        DrawRowHighlight(list_x, y, list_width, row_height - 3);
+      }
+      DrawText(m_font, list_x + 26, text_y,
+               std::string(m_localization.Translate("Artwork")) + " " + std::to_string(index + 1),
+               current ? m_value : m_text);
+      if (artwork[index].width > 0 && artwork[index].height > 0)
+      {
+        const std::string dimensions =
+            std::to_string(artwork[index].width) + "x" + std::to_string(artwork[index].height);
+        DrawTextRight(m_font_small, list_x + list_width - 20,
+                      text_y + (FontHeight(m_font) - FontHeight(m_font_small)) / 2,
+                      dimensions, current ? m_value : m_dim);
+      }
+    }
+    const bool show_failure = loaded == selection && preview_failed;
+    DrawArtworkPreview(loaded == selection ? preview : nullptr, layout.preview, false,
+                       show_failure ? std::string_view{} : std::string_view{"NO COVER"});
+    if (show_failure)
+    {
+      const SDL_Rect& rectangle = layout.preview;
+      DrawWrapped(m_font_small, rectangle.x + 16, rectangle.y + rectangle.h / 2 - 30,
+                  rectangle.w - 32, FontHeight(m_font_small) + 6, 3,
+                  m_localization.Translate("Preview unavailable"), m_dim);
+    }
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 2> footer = {
+        std::pair{"A", "Use artwork"}, std::pair{"B", "Back"}};
+    DrawFooter(footer);
+    DrawFadeIn();
+    SDL_RenderPresent(m_renderer);
+    WaitForNextFrame();
+  }
+  release_preview();
+  return -1;
+}
+
+void Launcher::DownloadCover(Game* game)
+{
+  if (!game)
+    return;
+  if (!m_cover_download_ready)
+  {
+    RenderMessage("Cover downloads unavailable",
+                  std::array<std::string, 2>{"The network or HTTP client could not be initialized.",
+                                             "Check the Switch network connection and try again."},
+                  true);
+    return;
+  }
+  const auto save_api_key = [&](std::string api_key) {
+    api_key = Trim(std::move(api_key));
+    m_store.Set("Network/SteamGridDBKey", api_key);
+    MarkStoreDirty();
+    FlushPendingSaves();
+    return api_key;
+  };
+  std::string api_key = Trim(m_store.Get("Network/SteamGridDBKey"));
+  if (api_key.empty())
+  {
+    if (!PromptText("Enter your free SteamGridDB API key", {}, &api_key, true, false,
+                    "Create a free API key at steamgriddb.com/profile/preferences/api"))
+    {
+      Toast("A SteamGridDB API key is required", 1200);
+      return;
+    }
+    api_key = save_api_key(std::move(api_key));
+  }
+  std::string query = game->title;
+  CoverDownload::GameResult selected_game;
+  while (true)
+  {
+    std::vector<CoverDownload::GameResult> matches;
+    std::atomic_bool cancel{false};
+    CoverDownload::Result result = CoverDownload::Result::Error;
+    CoverDownload::RequestOptions options{&cancel};
+    RunBusyTask(
+        "Searching SteamGridDB", query,
+        [&] { result = CoverDownload::SearchGames(api_key, query, &matches, &options); }, &cancel);
+    if (result == CoverDownload::Result::Cancelled)
+      return;
+    if (result == CoverDownload::Result::NoKey)
+    {
+      std::string replacement = api_key;
+      if (!PromptText("SteamGridDB API key rejected", replacement, &replacement, true, false,
+                      "Enter a valid key to retry the cover search.",
+                      "steamgriddb.com/profile/preferences/api"))
+        return;
+      api_key = save_api_key(std::move(replacement));
+      continue;
+    }
+    if (result != CoverDownload::Result::Ok && result != CoverDownload::Result::NotFound)
+    {
+      RenderMessage("Cover search failed",
+                    std::array<std::string, 1>{CoverDownload::ResultMessage(result)});
+      return;
+    }
+    std::vector<std::string> names{std::string(m_localization.Translate("Custom search..."))};
+    names.reserve(matches.size() + 1);
+    for (const auto& match : matches)
+      names.push_back(match.name);
+    const int match_index = Dropdown("Choose matching title", names, -1, true, false);
+    if (match_index < 0)
+      return;
+    if (match_index == 0)
+    {
+      std::string custom;
+      if (!PromptText("Custom SteamGridDB search", query, &custom, false, false))
+        continue;
+      custom = Trim(std::move(custom));
+      if (!custom.empty())
+        query = std::move(custom);
+      continue;
+    }
+    if (match_index > static_cast<int>(matches.size()))
+      return;
+    selected_game = matches[match_index - 1];
+    break;
+  }
+
+  std::vector<CoverDownload::Artwork> artwork;
+  std::atomic_bool artwork_cancel{false};
+  CoverDownload::Result artwork_result = CoverDownload::Result::Error;
+  CoverDownload::RequestOptions artwork_options{&artwork_cancel};
+  RunBusyTask(
+      "Loading available artwork", selected_game.name,
+      [&] {
+        artwork_result =
+            CoverDownload::FetchArtwork(api_key, selected_game.id, &artwork, &artwork_options);
+      },
+      &artwork_cancel);
+  if (artwork_result == CoverDownload::Result::Cancelled)
+    return;
+  if (artwork_result != CoverDownload::Result::Ok)
+  {
+    RenderMessage("Artwork search failed",
+                  std::array<std::string, 1>{CoverDownload::ResultMessage(artwork_result)});
+    return;
+  }
+  const int artwork_index = ChooseCoverArtwork(artwork, selected_game.name);
+  if (artwork_index < 0 || artwork_index >= static_cast<int>(artwork.size()))
+    return;
+  std::atomic_bool download_cancel{false};
+  CoverDownload::Result download = CoverDownload::Result::Error;
+  CoverDownload::RequestOptions download_options{&download_cancel};
+  RunBusyTask(
+      "Downloading selected cover", selected_game.name,
+      [&] {
+        download = CoverDownload::DownloadImage(artwork[artwork_index].url, CoverPath(*game),
+                                                &download_options);
+      },
+      &download_cancel);
+  if (download == CoverDownload::Result::Cancelled)
+    return;
+  if (download == CoverDownload::Result::Ok)
+  {
+    ReloadCover(game);
+    Toast("Cover downloaded", 1200);
+  }
+  else
+  {
+    RenderMessage("Cover download failed",
+                  std::array<std::string, 1>{CoverDownload::ResultMessage(download)});
+  }
 }
 
 void Launcher::ImportCoverFromFile(Game* game)
@@ -9007,7 +10437,7 @@ void Launcher::ImportCoverFromFile(Game* game)
         }
         if (!RecoverAtomicFile(destination))
         {
-          fail("Dolphin could not prepare the cover file safely.", std::strerror(errno));
+          fail("The launcher could not prepare the cover file safely.", std::strerror(errno));
           return;
         }
 
@@ -9034,14 +10464,14 @@ void Launcher::ImportCoverFromFile(Game* game)
         source.reset();
         if (!converted)
         {
-          fail("Dolphin could not convert the selected image to PNG.", SDL_GetError());
+          fail("The launcher could not convert the selected image to PNG.", SDL_GetError());
           return;
         }
         if (was_cancelled())
           return;
         if (IMG_SavePNG(converted.get(), temporary.c_str()) != 0)
         {
-          fail("Dolphin could not convert the selected image to PNG.", IMG_GetError());
+          fail("The launcher could not convert the selected image to PNG.", IMG_GetError());
           return;
         }
         converted.reset();
@@ -9053,21 +10483,21 @@ void Launcher::ImportCoverFromFile(Game* game)
         Surface verification{IMG_Load(temporary.c_str()), SDL_FreeSurface};
         if (!verification || verification->w <= 0 || verification->h <= 0)
         {
-          fail("Dolphin could not verify the converted cover.", IMG_GetError());
+          fail("The launcher could not verify the converted cover.", IMG_GetError());
           return;
         }
         verification.reset();
         FILE* saved_file = std::fopen(temporary.c_str(), "rb+");
         if (!saved_file)
         {
-          fail("Dolphin could not save the converted cover.", std::strerror(errno));
+          fail("The launcher could not save the converted cover.", std::strerror(errno));
           return;
         }
         const bool synced = ::fsync(::fileno(saved_file)) == 0;
         const bool closed = std::fclose(saved_file) == 0;
         if (!synced || !closed)
         {
-          fail("Dolphin could not save the converted cover.", std::strerror(errno));
+          fail("The launcher could not save the converted cover.", std::strerror(errno));
           return;
         }
         if (was_cancelled())
@@ -9076,7 +10506,7 @@ void Launcher::ImportCoverFromFile(Game* game)
         const bool had_current = RegularFileExists(destination);
         if (had_current && std::rename(destination.c_str(), backup.c_str()) != 0)
         {
-          fail("Dolphin could not replace the current cover safely.", std::strerror(errno));
+          fail("The launcher could not replace the current cover safely.", std::strerror(errno));
           return;
         }
         if (std::rename(temporary.c_str(), destination.c_str()) != 0)
@@ -9085,7 +10515,7 @@ void Launcher::ImportCoverFromFile(Game* game)
           if (had_current)
             std::rename(backup.c_str(), destination.c_str());
           fsdevCommitDevice("sdmc");
-          fail("Dolphin could not replace the current cover safely.", std::strerror(saved_errno));
+          fail("The launcher could not replace the current cover safely.", std::strerror(saved_errno));
           return;
         }
         fsdevCommitDevice("sdmc");
@@ -9119,7 +10549,7 @@ void Launcher::CoverSettings(Game* game)
   const std::string cover_path = CoverPath(*game);
   (void)RecoverAtomicFile(cover_path);
   const std::array<Row, 2> actions = {
-      Row{"Download from SteamGridDB", "Not available yet", false, false, false},
+      Row{"Download from SteamGridDB", "Online artwork", true, false, false},
       Row{"Import cover from file", "Local image", true, false, false},
   };
   int selection = 0;
@@ -9144,7 +10574,9 @@ void Launcher::CoverSettings(Game* game)
     BeginScreenFx();
   };
   const auto activate = [&] {
-    if (selection == 1)
+    if (selection == 0)
+      DownloadCover(game);
+    else
       ImportCoverFromFile(game);
     BeginScreenFx();
   };
@@ -9153,7 +10585,7 @@ void Launcher::CoverSettings(Game* game)
         !Confirm("Remove custom cover?",
                  std::array<std::string, 2>{
                      "The downloaded or imported cover will be deleted.",
-                     "Dolphin will use the game's embedded artwork when available."},
+                     "The launcher will use the game's embedded artwork when available."},
                  true))
     {
       BeginScreenFx();
@@ -9498,7 +10930,7 @@ void Launcher::DrawGameMenu(Game* game, int selection)
   for (int index = 0; index < GAME_MENU_COUNT; ++index)
   {
     const bool current = index == selection;
-    const bool submenu = index == 1 || index == 3 || index == 4;
+    const bool submenu = index == 1 || index == 3 || index == 4 || index == 5;
     std::string_view label = GAME_MENU_ITEMS[index];
     if (index == 3 && m_favorites.contains(game->key))
       label = "Favorite / collections  ★";
@@ -9607,6 +11039,10 @@ void Launcher::PerGameMenu(Game* game, bool* launch, bool* rescan)
       }
       else if (selection == 5)
       {
+        CreateHomeShortcut(game);
+      }
+      else if (selection == 6)
+      {
         if (game->has_game_config)
         {
           std::remove(GameIniPath(*game).c_str());
@@ -9639,23 +11075,52 @@ void Launcher::PerGameMenu(Game* game, bool* launch, bool* rescan)
                         "Remove this folder manually to avoid deleting unrelated files:")),
                     game->path});
           }
-          else if (Confirm("Delete game?",
-                           std::array<std::string, 4>{
-                               game->title, "",
-                               std::string(m_localization.Translate(
-                                   "This permanently deletes the game file.")),
-                               std::string(m_localization.Translate("This cannot be undone."))}))
+          else
           {
-            if (std::remove(game->path.c_str()) == 0)
+            // A cue sheet's tracks (or a CloneCD/Alcohol image's data files) go with it
+            const std::vector<std::string> companions =
+                UICommon::DiscImageCompanionFiles(game->path);
+            const std::string what =
+                companions.empty() ?
+                    std::string(m_localization.Translate("This permanently deletes the game file.")) :
+                    std::string(m_localization.Translate("This permanently deletes the game file")) +
+                        " " + std::string(m_localization.Translate("and its")) + " " +
+                        std::to_string(companions.size()) + " " +
+                        std::string(m_localization.Translate(
+                            companions.size() == 1 ? "track file." : "track files."));
+            if (Confirm("Delete game?",
+                        std::array<std::string, 4>{
+                            game->title, "", what,
+                            std::string(m_localization.Translate("This cannot be undone."))}))
             {
-              std::remove(CoverPath(*game).c_str());
-              std::remove(GameIniPath(*game).c_str());
-              *rescan = true;
-              Toast("Game deleted", 800);
-              return;
+              if (std::remove(game->path.c_str()) == 0)
+              {
+                std::size_t failed = 0;
+                for (const std::string& companion : companions)
+                {
+                  if (std::remove(companion.c_str()) != 0 && errno != ENOENT)
+                    ++failed;
+                }
+                std::remove(CoverPath(*game).c_str());
+                std::remove(GameIniPath(*game).c_str());
+                *rescan = true;
+                if (failed)
+                {
+                  RenderMessage("Delete incomplete",
+                                std::array<std::string, 1>{
+                                    std::to_string(failed) + " " +
+                                    std::string(m_localization.Translate(
+                                        failed == 1 ? "track file could not be removed." :
+                                                      "track files could not be removed."))},
+                                true);
+                  return;
+                }
+                Toast("Game deleted", 800);
+                return;
+              }
+              RenderMessage("Delete failed",
+                            std::array<std::string, 1>{"The game file could not be removed."}, true);
             }
-            RenderMessage("Delete failed",
-                          std::array<std::string, 1>{"The game file could not be removed."}, true);
           }
         }
       }
@@ -9674,7 +11139,7 @@ std::optional<LaunchRequest> Launcher::Run()
   if (!Initialize(false))
   {
     if (m_sdl_ready)
-      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Dolphin Launcher",
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "YabaSanshiro NX",
                                "The full SDL launcher could not be initialized.", m_window);
     return std::nullopt;
   }
@@ -9684,7 +11149,7 @@ std::optional<LaunchRequest> Launcher::Run()
   StartUsbInitialization();
   if (!m_startup_message.empty())
   {
-    RenderMessage("Dolphin", std::array<std::string, 1>{m_startup_message});
+    RenderMessage("YabaSanshiro NX", std::array<std::string, 1>{m_startup_message});
     m_startup_message.clear();
     BeginScreenFx();
   }

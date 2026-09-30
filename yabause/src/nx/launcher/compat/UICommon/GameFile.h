@@ -68,4 +68,8 @@ private:
   GameCover m_cover;
   bool m_valid = false;
 };
+
+// The other files that make up a disc image: a cue sheet's track files, a CloneCD image's .img
+// and .sub, an Alcohol image's .mdf. Empty for single-file images.
+std::vector<std::string> DiscImageCompanionFiles(const std::string& path);
 }  // namespace UICommon

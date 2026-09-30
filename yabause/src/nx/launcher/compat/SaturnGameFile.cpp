@@ -92,9 +92,10 @@ std::vector<std::uint8_t> ReadPrefix(const std::string& path, std::size_t bytes)
   return data;
 }
 
-// Path of the first track's file in a cue sheet
-std::string FirstCueTrack(const std::string& cue_path)
+// Paths of the track files a cue sheet names, in order
+std::vector<std::string> CueTracks(const std::string& cue_path)
 {
+  std::vector<std::string> tracks;
   std::ifstream cue(cue_path);
   std::string line;
   while (std::getline(cue, line))
@@ -120,10 +121,11 @@ std::string FirstCueTrack(const std::string& cue_path)
         continue;
       name = line.substr(name_start, name_end - name_start);
     }
-    return name.starts_with('/') || name.find(':') != std::string::npos ? name :
-                                                                           Directory(cue_path) + name;
+    tracks.push_back(name.starts_with('/') || name.find(':') != std::string::npos ?
+                         name :
+                         Directory(cue_path) + name);
   }
-  return {};
+  return tracks;
 }
 
 std::vector<std::uint8_t> ReadChdPrefix(const std::string& path)
@@ -151,8 +153,8 @@ std::vector<std::uint8_t> ReadDataTrackPrefix(const std::string& path)
     return ReadChdPrefix(path);
   if (extension == ".cue")
   {
-    const std::string track = FirstCueTrack(path);
-    return track.empty() ? std::vector<std::uint8_t>{} : ReadPrefix(track, SEARCH_BYTES);
+    const std::vector<std::string> tracks = CueTracks(path);
+    return tracks.empty() ? std::vector<std::uint8_t>{} : ReadPrefix(tracks.front(), SEARCH_BYTES);
   }
   if (extension == ".ccd")
   {
@@ -324,5 +326,39 @@ void GameFileCache::ForEach(
   std::lock_guard lock(m_mutex);
   for (const auto& [path, file] : m_files)
     callback(file);
+}
+std::vector<std::string> DiscImageCompanionFiles(const std::string& path)
+{
+  std::vector<std::string> files;
+  const std::string extension = Extension(path);
+  if (extension == ".cue")
+  {
+    // Only tracks next to the sheet (or below it): a sheet pointing elsewhere mustn't make
+    // deleting the game remove unrelated files
+    const std::string directory = Directory(path);
+    for (const std::string& track : CueTracks(path))
+    {
+      if (track != path && track.starts_with(directory) &&
+          track.find("/../") == std::string::npos && RegularFileExists(track) &&
+          std::find(files.begin(), files.end(), track) == files.end())
+        files.push_back(track);
+    }
+  }
+  else if (extension == ".ccd")
+  {
+    for (std::string_view companion : {".img", ".sub"})
+    {
+      const std::string file = FindCompanion(path, companion);
+      if (!file.empty())
+        files.push_back(file);
+    }
+  }
+  else if (extension == ".mds")
+  {
+    const std::string file = FindCompanion(path, ".mdf");
+    if (!file.empty())
+      files.push_back(file);
+  }
+  return files;
 }
 }  // namespace UICommon

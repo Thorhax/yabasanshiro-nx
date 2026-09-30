@@ -9,7 +9,8 @@
 #                                          copy the contents of dist/ to the root of the SD card
 #
 # DKP_IMAGE selects the image: it needs devkitA64, libnx and the switch portlibs used here
-# (SDL2, SDL2_ttf, SDL2_image, mesa, glad, libdrm_nouveau, freetype, harfbuzz, png, jpeg, webp).
+# (SDL2, SDL2_ttf, SDL2_image, mesa, glad, libdrm_nouveau, freetype, harfbuzz, png, jpeg, webp,
+# curl, turbojpeg, ntfs-3g).
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +25,14 @@ export DEVKITPRO=/opt/devkitpro
 export DEVKITA64=/opt/devkitpro/devkitA64
 export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:\$PATH
 mkdir -p ${BUILD}
+# USB and SMB storage libraries, with devkitPro's own Switch toolchain
+if [ ! -f ${BUILD}/third_party/install/lib/libsmb2.a ] || [ ! -f ${BUILD}/third_party/install/lib/liblibusbhsfs.a ]; then
+  cmake -S ${SRC}/src/nx/third_party -B ${BUILD}/third_party \
+    -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=${BUILD}/third_party/install > /work/build-third-party.log 2>&1
+  cmake --build ${BUILD}/third_party -j\$(nproc) >> /work/build-third-party.log 2>&1 || { tail -40 /work/build-third-party.log; exit 1; }
+  cmake --install ${BUILD}/third_party >> /work/build-third-party.log 2>&1
+fi
 cd ${BUILD}
 cmake ${SRC} \
   -DCMAKE_TOOLCHAIN_FILE=${SRC}/src/nx/nx-toolchain.cmake \

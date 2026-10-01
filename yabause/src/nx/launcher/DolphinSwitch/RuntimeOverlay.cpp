@@ -49,8 +49,9 @@ struct BrowserEntry
 
 constexpr std::uint64_t MENU_CHORD = HidNpadButton_Minus | HidNpadButton_Plus;
 constexpr int NUM_STATES = 10;
-constexpr int MAIN_ITEM_COUNT = 8;
+constexpr int MAIN_ITEM_COUNT = 9;
 constexpr int MAIN_SHOW_FPS = 5;
+constexpr int MAIN_ASPECT = 6;
 constexpr int DISC_ITEM_COUNT = 3;
 
 std::mutex s_mutex;
@@ -58,6 +59,7 @@ bool s_visible = false;
 bool s_capture_until_release = false;
 bool s_initialized = false;
 bool s_show_fps = false;
+std::string s_aspect;
 Page s_page = Page::Main;
 int s_selection = 0;
 std::deque<Action> s_actions;
@@ -253,11 +255,14 @@ void ActivateSelection()
     case MAIN_SHOW_FPS:
       QueueAction({ActionType::ToggleFPS});
       break;
-    case 6:
+    case MAIN_ASPECT:
+      QueueAction({ActionType::CycleAspect, 1});
+      break;
+    case 7:
       QueueAction({ActionType::Reset});
       CloseMenu();
       break;
-    case 7:
+    case 8:
       QueueAction({ActionType::StopToLauncher});
       CloseMenu();
       break;
@@ -363,8 +368,9 @@ void RenderMainPage()
   SelectableRow(std::string("Show FPS                         <  ") +
                     (s_show_fps ? "Enabled" : "Disabled") + "  >",
                 MAIN_SHOW_FPS);
-  SelectableRow("Reset console", 6);
-  SelectableRow("Return to launcher", 7);
+  SelectableRow("Aspect ratio                     <  " + s_aspect + "  >", MAIN_ASPECT);
+  SelectableRow("Reset console", 7);
+  SelectableRow("Return to launcher", 8);
 }
 
 void RenderCheatsPage()
@@ -570,11 +576,17 @@ void UpdateInput(std::uint64_t down, std::uint64_t held)
     }
   }
 
-  // Left/right flips the Show FPS option in place, as on NaGa's menu
+  // Left/right flips the Show FPS and aspect ratio options in place, as on NaGa's menu
   if (s_page == Page::Main && s_selection == MAIN_SHOW_FPS &&
       (down & (HidNpadButton_Left | HidNpadButton_Right)))
   {
     QueueAction({ActionType::ToggleFPS});
+    return;
+  }
+  if (s_page == Page::Main && s_selection == MAIN_ASPECT &&
+      (down & (HidNpadButton_Left | HidNpadButton_Right)))
+  {
+    QueueAction({ActionType::CycleAspect, (down & HidNpadButton_Left) ? -1 : 1});
     return;
   }
 
@@ -624,6 +636,12 @@ void SetShowFPS(bool show)
 {
   std::lock_guard lock{s_mutex};
   s_show_fps = show;
+}
+
+void SetAspect(std::string name)
+{
+  std::lock_guard lock{s_mutex};
+  s_aspect = std::move(name);
 }
 
 void SetStatus(std::string message)

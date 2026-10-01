@@ -22,6 +22,7 @@ enum class ActionType
   EjectDisc,
   ChangeDisc,
   ToggleFPS,
+  CycleAspect,  // value: +1 next, -1 previous
   ToggleCheat,  // value: index in the cheat list
   AddCheat,
   DeleteCheat,  // value: index in the cheat list
@@ -30,7 +31,7 @@ enum class ActionType
 struct Action
 {
   ActionType type{};
-  int value = 0;  // save state slot or cheat index
+  int value = 0;  // save state slot, cheat index or direction
   std::string path;
 };
 
@@ -57,6 +58,8 @@ std::string CurrentStatus();
 void ShowAlert(std::string caption, std::string message);
 void RefreshStateInfo();
 void SetShowFPS(bool show);
+// The aspect ratio shown on the menu, by name ("4:3 (TV)", ...)
+void SetAspect(std::string name);
 
 struct CheatEntry
 {

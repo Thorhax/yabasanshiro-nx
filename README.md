@@ -17,7 +17,7 @@ NaGa's [Dolphin NX](https://github.com/NaGaa95/dolphin-nx) frontend.
   one game at a time or for the whole library.
 - **HOME Menu shortcuts**: start a game straight from the Switch HOME Menu.
 - **Quick menu** (Minus + Plus in game): 10 save-state slots, cheats, disc eject and change,
-  FPS counter, console reset, return to the launcher.
+  aspect ratio (saved for the game), FPS counter, console reset, return to the launcher.
 - **Cheats**: Action Replay / GameShark codes, from RetroArch cheat files or typed in during a
   game (see [Cheats](#cheats)).
 - **Controllers**, per player and per game: Saturn pad, 3D pad (analog), Virtual On Twin Stick or
@@ -92,6 +92,12 @@ Default Saturn pad mapping (changeable globally or per game under **Settings →
 | Start | Plus |
 
 **Minus + Plus** opens the quick menu during a game.
+
+Changing the **Aspect ratio** in the quick menu (left / right) takes effect when the game
+resumes and is saved as that game's own setting, the same one as on its Video settings page.
+
+If a game freezes, try turning off **Rotating background on GPU** in its Video settings
+(Sonic R freezes when loading a race with it on).
 
 Controller types:
 

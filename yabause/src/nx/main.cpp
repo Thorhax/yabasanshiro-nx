@@ -65,6 +65,8 @@ extern "C" {
 #include "DolphinSwitch/RuntimeOverlay.h"
 #include "overlay.h"
 #include "UICommon/GameFile.h"
+#include "Common/FileUtil.h"
+#include "Common/IniFile.h"
 #include "sh2_dynarec_devmiyax/dynarec_jit_nx.h"
 
 // Must match sh2_dynarec_devmiyax/DynarecSh2CInterface.cpp
@@ -794,6 +796,33 @@ static void addCheat()
   publishCheats();
 }
 
+// The aspect ratios in the order the launcher lists them (values are ASPECT_RATE_MODE)
+static const struct { int mode; const char * name; } kAspects[] = {
+  {1, "4:3 (TV)"}, {0, "Square pixels"}, {2, "16:9"}, {3, "Stretch"}};
+static const int kAspectCount = sizeof(kAspects) / sizeof(kAspects[0]);
+
+// The file the launcher keeps this game's own settings in (the last of the game's files,
+// as in Launcher::GameIniPath); empty when the game has none
+static std::string s_game_ini;
+
+// Changes one of the game's own settings, as the launcher's game settings page would
+static bool saveGameSetting(const char * section, const char * key, const std::string & value)
+{
+  if (s_game_ini.empty() || !File::CreateFullPath(s_game_ini))
+    return false;
+  Common::IniFile ini;
+  ini.Load(s_game_ini);
+  ini.GetOrCreateSection(section)->Set(key, value);
+  return ini.Save(s_game_ini);
+}
+
+static int aspectIndex(int mode)
+{
+  for (int i = 0; i < kAspectCount; i++)
+    if (kAspects[i].mode == mode) return i;
+  return 0;
+}
+
 // Carries out what the player picked in the quick menu. Runs on the main thread while the
 // game is paused and the main thread holds the GL context (saving a state reads the sprite
 // framebuffer back from the GPU).
@@ -844,6 +873,17 @@ static bool runMenuAction(const DolphinSwitch::RuntimeOverlay::Action & action)
   case ActionType::ToggleFPS:
     menu::SetShowFPS(!menu::ShowFPS());
     break;
+  case ActionType::CycleAspect: {
+    // Kept as the game's own setting. The menu holds the GL context, and the change shows
+    // once the game resumes.
+    const int index = (aspectIndex(s_settings.aspect_mode) + action.value + kAspectCount) % kAspectCount;
+    s_settings.aspect_mode = kAspects[index].mode;
+    VIDCore->Resize(0, 0, s_surface_width, s_surface_height, 1, s_settings.aspect_mode);
+    menu::SetAspect(kAspects[index].name);
+    if (!saveGameSetting("video", "aspect", std::to_string(s_settings.aspect_mode)))
+      menu::SetStatus("Aspect ratio changed for this session only (could not save it)");
+    break;
+  }
   case ActionType::ToggleCheat: {
     const auto & list = nx::cheats::list();
     if (action.value >= 0 && action.value < (int)list.size()) {
@@ -923,6 +963,7 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     printf("Game settings: %s%s\n", ini.c_str(), fileExists(ini) ? "" : " (none)");
 
   s_settings = nx::loadSettings(game_inis);
+  s_game_ini = game_inis.empty() ? std::string() : game_inis.back();
   if (s_settings.dynarec && !DynaJitAvailable()) {
     printf("JIT unavailable, falling back to the SH2 interpreter\n");
     s_settings.dynarec = false;
@@ -996,6 +1037,7 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   const char * game_code = Cs2GetCurrentGmaecode();
   DolphinSwitch::RuntimeOverlay::BeginSession(game, stateDirectory(), game_code ? game_code : "",
                                               false);
+  DolphinSwitch::RuntimeOverlay::SetAspect(kAspects[aspectIndex(s_settings.aspect_mode)].name);
   nx::cheats::load(game, game_code);
   publishCheats();
 

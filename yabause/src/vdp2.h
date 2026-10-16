@@ -448,6 +448,7 @@ void DisableAutoFrameSkip(void);
 void VdpResume(void);
 
 void VDP2SetFrameLimit(int mode);
+void VDP2TakePacingStats(int * late, int * resyncs);
 
 Vdp2 * Vdp2RestoreRegs(int line, Vdp2* lines);
 

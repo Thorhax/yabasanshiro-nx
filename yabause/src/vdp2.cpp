@@ -122,7 +122,6 @@ static int previous_skipped = 0;
 static s64 curticks = 0;
 static s64 diffticks = 0;
 static u32 framecount = 0;
-static s64 onesecondticks = 0;
 static int enableFrameLimit = 1;
 static int frameLimitShift = 0;
 
@@ -738,7 +737,6 @@ void VDP2SetFrameLimit(int mode) {
     enableFrameLimit = 1;
     frameLimitShift = 0; // 60Hz
     framecount = 0;
-    onesecondticks = 0;
     lastticks = YabauseGetTicks();
     break;
   case 1:
@@ -749,78 +747,87 @@ void VDP2SetFrameLimit(int mode) {
     enableFrameLimit = 1;
     frameLimitShift = 1; // 120Hz
     framecount = 0;
-    onesecondticks = 0;
     lastticks = YabauseGetTicks();
     break;
   default:
     enableFrameLimit = 1;
     frameLimitShift = 0;
     framecount = 0;
-    onesecondticks = 0;
     lastticks = YabauseGetTicks();
     break;
   }
   VideoSetSetting(VDP_SETTING_FRAMELIMIT_MODE, mode);
 }
 
+// Frame pacing statistics for the port's log (late = the frame started after
+// its slot had passed, resync = fell so far behind that the schedule restarted)
+static int pacingLateFrames = 0;
+static int pacingResyncs = 0;
+
+extern "C" void VDP2TakePacingStats(int * late, int * resyncs) {
+  *late = pacingLateFrames;
+  *resyncs = pacingResyncs;
+  pacingLateFrames = 0;
+  pacingResyncs = 0;
+}
+
+// Paces frames against a fixed schedule: frame n is due at
+// lastticks + n / fps seconds. Upstream's per-second budget credited a frame
+// that never elapsed whenever its window restarted, which ran games at 61 fps
+// and dropped a frame every second on a 60 Hz screen. A frame that is already
+// due (for example because a vsynced swap blocked) never sleeps, so the limiter
+// cannot push the next swap past a vblank.
 void frameSkipAndLimit() {
   if (FrameAdvanceVariable == 0 && enableFrameLimit )
   {
-    const u32 fps = (yabsys.IsPal ? 50 : 60) << frameLimitShift ;
-    framecount++;
+    const s64 fps = (yabsys.IsPal ? 50 : 60) << frameLimitShift ;
     curticks = YabauseGetTicks();
-    if (framecount > fps)
-    {
-      onesecondticks -= yabsys.tickfreq;
-      if (onesecondticks > (s64)( (yabsys.OneFrameTime>>frameLimitShift)  * 4)) {
-        onesecondticks = 0;
-      }
-      framecount = 1;
-      lastticks = (curticks - (yabsys.OneFrameTime>>frameLimitShift) );
+    framecount++;
+    const s64 deadline = lastticks + (s64)framecount * yabsys.tickfreq / fps;
+    diffticks = curticks - deadline;
+
+    // Far behind (loading, a slow scene): restart the schedule rather than
+    // racing through the backlog
+    if (diffticks > yabsys.tickfreq * 2 / fps) {
+      pacingResyncs++;
+      lastticks = curticks;
+      framecount = 0;
+      return;
     }
 
-    u64 targetTime = ( (yabsys.OneFrameTime>>frameLimitShift)  * (u64)framecount);
-    if (framecount == fps) {
-      targetTime = yabsys.tickfreq; // 1sec
+    if (diffticks > yabsys.tickfreq / (fps * 2)) {
+      pacingLateFrames++;
     }
 
-    diffticks = curticks - lastticks;
-
-    if ( autoframeskipenab && (onesecondticks + diffticks) > targetTime )
+    if ( autoframeskipenab && diffticks > 0 )
     {
-      LOG("Frame skip target:%lu current:%lu", targetTime, (onesecondticks + diffticks));
+      LOG("Frame skip late by %ld", diffticks);
       // Skip the next frame
       skipnextframe = 1;
 
       // How many frames should we skip?
       framestoskip = 1;
-
     }
 
-    // just wait for next vsync
-    targetTime -= 1000;
-    if ( (onesecondticks + diffticks) < targetTime )
+    if (diffticks < 0)
     {
-
-      s64 sleeptime = (targetTime - (onesecondticks + diffticks));
-      s64 xcurticks = YabauseGetTicks();
+      s64 sleeptime = -diffticks;
       if (sleeptime-1000 > 0) {
         YabNanosleep(sleeptime-1000);
       }
-
       for (;;)
       {
         curticks = YabauseGetTicks();
-        diffticks = curticks - lastticks;
-        if ((onesecondticks + diffticks) >= targetTime)
+        if (curticks >= deadline)
           break;
       }
-      //u64 realstime = YabauseGetTicks() - xcurticks;
-      //yprintf("req time %d,real time %d diff = %d", (u32)sleeptime, (u32)realstime, realstime-sleeptime);
     }
 
-    onesecondticks += diffticks;
-    lastticks = curticks;
+    // Keep the frame counter small
+    if (framecount >= (u32)fps) {
+      lastticks = deadline;
+      framecount = 0;
+    }
   }
 
 }
@@ -2596,6 +2603,7 @@ void ToggleFullScreen(void)
 void EnableAutoFrameSkip(void)
 {
    autoframeskipenab = 1;
+   framecount = 0;
    lastticks = YabauseGetTicks();
 }
 

@@ -152,11 +152,22 @@ void YuiErrorMsg(const char *string)
   printf("YuiErrorMsg: %s\n", string);
 }
 
+// Time spent in eglSwapBuffers, written by the render thread and read by the
+// log line: shows whether vsync is really making the swap wait
+static std::atomic<u64> s_swap_ns_total{0};
+static std::atomic<u64> s_swap_ns_max{0};
+static std::atomic<u32> s_swap_count{0};
+
 void YuiSwapBuffers(void)
 {
   // Render thread, with the finished frame in the back buffer
   nx::overlay::onPresent(s_surface_width, s_surface_height);
+  const u64 start = armGetSystemTick();
   eglSwapBuffers(s_display, s_surface);
+  const u64 ns = armTicksToNs(armGetSystemTick() - start);
+  s_swap_ns_total += ns;
+  if (ns > s_swap_ns_max) s_swap_ns_max = ns;
+  s_swap_count++;
 }
 
 int YuiRevokeOGLOnThisThread()
@@ -1092,7 +1103,14 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     }
     if (elapsed_ns >= 5000000000ULL) {
       const double fps = stats_frames * 1e9 / (double)elapsed_ns;
-      printf("frames/s %.1f, game code '%s'\n", fps, Cs2GetCurrentGmaecode());
+      int late = 0, resyncs = 0;
+      VDP2TakePacingStats(&late, &resyncs);
+      const u32 swaps = s_swap_count.exchange(0);
+      const u64 swap_total = s_swap_ns_total.exchange(0);
+      const u64 swap_max = s_swap_ns_max.exchange(0);
+      printf("frames/s %.1f, game code '%s', late %d, resync %d, swap avg %.1f max %.1f ms\n", fps,
+             Cs2GetCurrentGmaecode(), late, resyncs, swaps ? swap_total / 1e6 / swaps : 0.0,
+             swap_max / 1e6);
       nx::overlay::setFps((float)fps);
       stats_frames = 0;
       stats_start = armGetSystemTick();

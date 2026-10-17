@@ -23,4 +23,6 @@
 #define SNDCORE_SDL 1
 
 extern SoundInterface_struct SNDSDL;
+u32 SNDSDLBufferedSamples(void);
+u32 SNDSDLTakeUnderruns(void);
 #endif

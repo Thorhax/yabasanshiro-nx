@@ -74,11 +74,17 @@ SNDSDLMidiOut
 #endif
 };
 
-#define NUMSOUNDBLOCKS  4
+// Ring buffer of NUMSOUNDBLOCKS frames of sound. soundfill counts the bytes
+// written but not yet played: upstream had no fill count, so when the game
+// ran a little slow the callback replayed old sound (heard as stutter) and an
+// empty buffer looked full to the writer.
+#define NUMSOUNDBLOCKS  6
 
 static u16 *stereodata16;
 static u32 soundoffset;
 static volatile u32 soundpos;
+static volatile u32 soundfill;
+static volatile u32 soundunderruns;
 static u32 soundlen;
 static u32 soundbufsize;
 static SDL_AudioSpec audiofmt;
@@ -90,15 +96,27 @@ static int muted = 0;
 static void MixAudio(UNUSED void *userdata, Uint8 *stream, int len) {
 	int i;
 	Uint8* soundbuf = (Uint8*)stereodata16;
+	int avail = (int)soundfill;
 
-	// original code
-	for (i = 0; i < len; i++)
+	// Whole stereo samples only, so the channels never swap
+	if (avail > len)
+		avail = len;
+	avail &= ~3;
+
+	for (i = 0; i < avail; i++)
 	{
 		if (soundpos >= soundbufsize)
 			soundpos = 0;
 		stream[i] = muted ? audiofmt.silence : soundbuf[soundpos];
 		soundpos++;
 	}
+	soundfill -= avail;
+
+	// Ran dry: play silence rather than old sound
+	if (i < len)
+		soundunderruns++;
+	for (; i < len; i++)
+		stream[i] = audiofmt.silence;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -145,6 +163,8 @@ static int SNDSDLInit(void)
    memset(stereodata16, 0, soundbufsize);
 
    soundpos = 0;
+   soundoffset = 0;
+   soundfill = 0;
 
    SDL_PauseAudio(0);
 
@@ -159,6 +179,7 @@ static void SNDSDLDeInit(void)
 
    if (stereodata16)
       free(stereodata16);
+   stereodata16 = NULL;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -172,16 +193,24 @@ static int SNDSDLReset(void)
 
 static int SNDSDLChangeVideoFormat(int vertfreq)
 {
+   SDL_LockAudio();
    soundlen = audiofmt.freq / vertfreq;
    soundbufsize = soundlen * NUMSOUNDBLOCKS * 2 * 2;
 
    if (stereodata16)
       free(stereodata16);
 
-   if ((stereodata16 = (u16 *)malloc(soundbufsize)) == NULL)
+   if ((stereodata16 = (u16 *)malloc(soundbufsize)) == NULL) {
+      soundbufsize = 0;
+      SDL_UnlockAudio();
       return -1;
+   }
 
    memset(stereodata16, 0, soundbufsize);
+   soundpos = 0;
+   soundoffset = 0;
+   soundfill = 0;
+   SDL_UnlockAudio();
 
    return 0;
 }
@@ -215,6 +244,10 @@ static void SNDSDLUpdateAudio(u32 *leftchanbuffer, u32 *rightchanbuffer, u32 num
    u32 copy1size=0, copy2size=0;
    SDL_LockAudio();
 
+   // Never overwrite sound that hasn't been played yet
+   if (num_samples > (soundbufsize - soundfill) / (sizeof(s16) * 2))
+      num_samples = (soundbufsize - soundfill) / (sizeof(s16) * 2);
+
    if ((soundbufsize - soundoffset) < (num_samples * sizeof(s16) * 2))
    {
       copy1size = (soundbufsize - soundoffset);
@@ -236,6 +269,7 @@ static void SNDSDLUpdateAudio(u32 *leftchanbuffer, u32 *rightchanbuffer, u32 num
 
    soundoffset += copy1size + copy2size;   
    soundoffset %= soundbufsize;
+   soundfill += copy1size + copy2size;
 
    SDL_UnlockAudio();
 }
@@ -244,14 +278,26 @@ static void SNDSDLUpdateAudio(u32 *leftchanbuffer, u32 *rightchanbuffer, u32 num
 
 static u32 SNDSDLGetAudioSpace(void)
 {
-   u32 freespace=0;
+   return ((soundbufsize - soundfill) / sizeof(s16) / 2);
+}
 
-   if (soundoffset > soundpos)
-      freespace = soundbufsize - soundoffset + soundpos;
-   else
-      freespace = soundpos - soundoffset;
+//////////////////////////////////////////////////////////////////////////////
 
-   return (freespace / sizeof(s16) / 2);
+// Samples queued for playback, for the frame limiter's sound check
+u32 SNDSDLBufferedSamples(void)
+{
+   // Not the active sound core: report plenty so nobody waits on it
+   if (stereodata16 == NULL)
+      return 0xFFFFFFFF;
+   return soundfill / sizeof(s16) / 2;
+}
+
+// Times the sound ran dry since the last call, for the port's log
+u32 SNDSDLTakeUnderruns(void)
+{
+   u32 count = soundunderruns;
+   soundunderruns -= count;
+   return count;
 }
 
 //////////////////////////////////////////////////////////////////////////////

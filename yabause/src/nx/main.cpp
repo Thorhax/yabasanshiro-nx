@@ -1103,14 +1103,15 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     }
     if (elapsed_ns >= 5000000000ULL) {
       const double fps = stats_frames * 1e9 / (double)elapsed_ns;
-      int late = 0, resyncs = 0;
-      VDP2TakePacingStats(&late, &resyncs);
+      int late = 0, resyncs = 0, audio_boosts = 0;
+      VDP2TakePacingStats(&late, &resyncs, &audio_boosts);
+      const u32 underruns = SNDSDLTakeUnderruns();
       const u32 swaps = s_swap_count.exchange(0);
       const u64 swap_total = s_swap_ns_total.exchange(0);
       const u64 swap_max = s_swap_ns_max.exchange(0);
-      printf("frames/s %.1f, game code '%s', late %d, resync %d, swap avg %.1f max %.1f ms\n", fps,
-             Cs2GetCurrentGmaecode(), late, resyncs, swaps ? swap_total / 1e6 / swaps : 0.0,
-             swap_max / 1e6);
+      printf("frames/s %.1f, game code '%s', late %d, resync %d, sound low %d, sound dry %u, "
+             "swap avg %.1f max %.1f ms\n", fps, Cs2GetCurrentGmaecode(), late, resyncs, audio_boosts,
+             (unsigned)underruns, swaps ? swap_total / 1e6 / swaps : 0.0, swap_max / 1e6);
       nx::overlay::setFps((float)fps);
       stats_frames = 0;
       stats_start = armGetSystemTick();

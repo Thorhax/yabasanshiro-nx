@@ -62,6 +62,12 @@ extern "C" void YglNxVdp1ReadBack(void);
 #include "vidogl.h"
 #include "vidsoft.h"
 #include <atomic>
+#if defined(__SWITCH__)
+#include "scsp.h"
+extern "C" {
+#include "sndsdl.h"
+}
+#endif
 #if defined(HAVE_VULKAN)
 #include "vulkan/VIDVulkanCInterface.h"
 #endif
@@ -763,12 +769,15 @@ void VDP2SetFrameLimit(int mode) {
 // its slot had passed, resync = fell so far behind that the schedule restarted)
 static int pacingLateFrames = 0;
 static int pacingResyncs = 0;
+static int pacingAudioBoosts = 0;
 
-extern "C" void VDP2TakePacingStats(int * late, int * resyncs) {
+extern "C" void VDP2TakePacingStats(int * late, int * resyncs, int * audioboosts) {
   *late = pacingLateFrames;
   *resyncs = pacingResyncs;
+  *audioboosts = pacingAudioBoosts;
   pacingLateFrames = 0;
   pacingResyncs = 0;
+  pacingAudioBoosts = 0;
 }
 
 // Paces frames against a fixed schedule: frame n is due at
@@ -786,9 +795,10 @@ void frameSkipAndLimit() {
     const s64 deadline = lastticks + (s64)framecount * yabsys.tickfreq / fps;
     diffticks = curticks - deadline;
 
-    // Far behind (loading, a slow scene): restart the schedule rather than
-    // racing through the backlog
-    if (diffticks > yabsys.tickfreq * 2 / fps) {
+    // Behind schedule, frames run back to back until they catch up, so a few
+    // slow frames don't cost emulated time (the sound would underrun). Only a
+    // long stall (half a second, e.g. loading) restarts the schedule.
+    if (diffticks > yabsys.tickfreq / 2) {
       pacingResyncs++;
       lastticks = curticks;
       framecount = 0;
@@ -798,6 +808,18 @@ void frameSkipAndLimit() {
     if (diffticks > yabsys.tickfreq / (fps * 2)) {
       pacingLateFrames++;
     }
+
+#if defined(__SWITCH__)
+    // The sound clock and the system timer drift apart slightly, and a slow
+    // stretch drains the sound buffer. While less than two frames of sound
+    // are queued, move the schedule 1 ms earlier per frame (at most 6% fast)
+    // so the buffer refills instead of running dry.
+    if (diffticks < 0 && SNDSDLBufferedSamples() < (u32)(44100 * 2 / fps)) {
+      pacingAudioBoosts++;
+      lastticks -= yabsys.tickfreq / 1000;
+      diffticks += yabsys.tickfreq / 1000;
+    }
+#endif
 
     if ( autoframeskipenab && diffticks > 0 )
     {

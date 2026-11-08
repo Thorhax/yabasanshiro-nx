@@ -68,10 +68,13 @@ int YabThreadInit(){
 
 //////////////////////////////////////////////////////////////////////////////
 
+void NxThreadInitHook(void);  // vdp2.cpp: point the thread at the real VDP registers
+
 static void ThreadEntry(void * p)
 {
   YabThreadNx * t = (YabThreadNx *)p;
   current_id = (int)(t - threads);
+  NxThreadInitHook();
   t->func(t->arg);
 }
 
@@ -292,6 +295,7 @@ void YabThreadSetCurrentThreadAffinityMask(int mask)
 {
   // Like the Linux port, the argument is a core index, not a bit mask
   Result rc = svcSetThreadCoreMask(CUR_THREAD_HANDLE, mask, 1ULL << mask);
+  printf("thread %d pinned to core %d (was on %d)\n", current_id, mask, (int)svcGetCurrentProcessorNumber());
   if (R_FAILED(rc))
     printf("YabThreadSetCurrentThreadAffinityMask(%d) failed: 0x%x\n", mask, rc);
 }

@@ -655,6 +655,9 @@ u32 YabauseGetFrameCount() {
 
 //#define YAB_STATICS
 void SyncCPUtoSCSP();
+#if defined(NX) && defined(ASYNC_SCSP)
+static void NxWaitForSoundCpu(void);
+#endif
 u64 getM68KCounter();
 u64 g_m68K_dec_cycle = 0;
 
@@ -791,6 +794,9 @@ int YabauseEmulate(void) {
          PROFILE_STOP("hblankout");
          PROFILE_START("SCSP");
          ScspExec();
+#if defined(NX) && defined(ASYNC_SCSP)
+         NxWaitForSoundCpu();
+#endif
          PROFILE_STOP("SCSP");
          yabsys.DecilineCount = 0;
          yabsys.LineCount++;
@@ -798,7 +804,16 @@ int YabauseEmulate(void) {
          if (yabsys.LineCount == yabsys.VBlankLineCount) {
 
 #if defined(ASYNC_SCSP)
+            {
+              // How far the sound thread is behind at VBlank-IN (port log, in 68000 cycles)
+              extern u64 getM68kDoneCounter(void);
+              const u64 given = saved_m68k_cycles >> SCSP_FRACTIONAL_BITS;
+              const u64 done = getM68kDoneCounter();
+              g_nx_prof[NX_PROF_SCSP_LAG] += given > done ? given - done : 0;
+            }
+#if !defined(NX)
             setM68kCounter((u64)(44100 * 256 / 60) << SCSP_FRACTIONAL_BITS);
+#endif
 #endif
             PROFILE_START("vblankin");
             // VBlankIN
@@ -928,14 +943,43 @@ int YabauseEmulate(void) {
 }
 
 
+#if defined(NX) && defined(ASYNC_SCSP)
+// The sound thread runs freely behind the SH-2s; once a line, hold the SH-2s
+// while it is more than half a frame of 68000 cycles behind. The counters only
+// grow (saved_m68k_cycles is never reset on the Switch), so no per-frame
+// handshake is needed, and the sound CPU's VBlank work overlaps the next frame.
+#define NX_SCSP_MAX_LAG ((u64)(44100 * 256 / 60) / 2)
+static void NxWaitForSoundCpu(void) {
+  extern u64 getM68kDoneCounter(void);
+  if (g_scsp_main_mode != 0) return;
+  const u64 given = saved_m68k_cycles >> SCSP_FRACTIONAL_BITS;
+  if (given - getM68kDoneCounter() <= NX_SCSP_MAX_LAG) return;
+  const s64 t0 = YabauseGetTicks();
+  while (given - getM68kDoneCounter() > NX_SCSP_MAX_LAG) {
+    // Never hang the game on it (sound thread stopped, or paused for a reset)
+    if (YabauseGetTicks() - t0 > 200000) break;
+    YabThreadYield();
+  }
+  g_nx_prof[NX_PROF_E_SCSP] += (u64)(YabauseGetTicks() - t0);
+}
+#endif
+
 void SyncCPUtoSCSP() {
   //LOG("[SH2] WAIT SCSP");
+#if defined(NX)
+  // Nothing to do: see NxWaitForSoundCpu
+  return;
+#endif
   if (g_scsp_main_mode == 0) {
     // Leave the frame's cycle budget (set at VBlankIN) in place until the
     // SCSP thread reports it consumed. Overwriting it here raced with that
     // thread: if it hadn't polled the counter yet it never saw the budget,
     // and both threads waited on each other forever.
-    YabWaitEventQueue(q_scsp_finish);
+    {
+      const s64 t0 = YabauseGetTicks();
+      YabWaitEventQueue(q_scsp_finish);
+      g_nx_prof[NX_PROF_E_SCSP] += (u64)(YabauseGetTicks() - t0);
+    }
     saved_m68k_cycles = 0;
     setM68kCounter(saved_m68k_cycles);
     YabAddEventQueue(q_scsp_frame_start, 0);
@@ -1012,7 +1056,15 @@ void YabauseStopSlave(void) {
 //////////////////////////////////////////////////////////////////////////////
 
 s64 YabauseGetTicks(void) {
-#ifdef WIN32
+#if defined(__SWITCH__)
+   // The system tick counter (19.2 MHz, as armGetSystemTick) in microseconds. gettimeofday() here is
+   // the wall clock from the time service, which steps and isn't monotonic:
+   // the frame limiter read it as falling half a second behind on most frames
+   // and stopped limiting (games ran at 90-120 fps, sound overflowed).
+   u64 tick;
+   __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(tick));
+   return (s64)(tick * 5 / 96);
+#elif defined(WIN32)
   LARGE_INTEGER ticks;
    QueryPerformanceCounter(&ticks);
    return (s64)ticks.QuadPart;
@@ -1040,7 +1092,9 @@ s64 YabauseGetTicks(void) {
 void YabauseSetVideoFormat(int type) {
    yabsys.IsPal = type;
    yabsys.MaxLineCount = type ? 313 : 263;
-#ifdef WIN32
+#if defined(__SWITCH__)
+   yabsys.tickfreq = 1000000;
+#elif defined(WIN32)
    QueryPerformanceFrequency((LARGE_INTEGER *)&yabsys.tickfreq);
 #elif defined(_arch_dreamcast)
    yabsys.tickfreq = 1000;

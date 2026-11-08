@@ -48,6 +48,8 @@ extern "C" {
 #include "cs2.h"
 #include "debug.h"
 #include "sndsdl.h"
+#include "sndnx.h"
+extern "C" void NxSoundCpuStatus(u32 * pc, int * running, u32 * sr);
 #include "osdcore.h"
 #include "ygl.h"
 #include "yui.h"
@@ -125,6 +127,7 @@ CDInterface *CDCoreList[] = {
 
 SoundInterface_struct *SNDCoreList[] = {
   &SNDDummy,
+  &SNDNX,
 #ifdef HAVE_LIBSDL
   &SNDSDL,
 #endif
@@ -368,11 +371,8 @@ static int yabauseinit(bool use_bios)
   yinit.percoretype = PERCORE_DUMMY;
   yinit.sh2coretype = s_settings.dynarec ? SH2CORE_DYNAMIC : SH2CORE_INTERPRETER;
   yinit.vidcoretype = VIDCORE_OGL;
-#ifdef HAVE_LIBSDL
-  yinit.sndcoretype = SNDCORE_SDL;
-#else
-  yinit.sndcoretype = SNDCORE_DUMMY;
-#endif
+  yinit.sndcoretype = SNDCORE_NX;
+  SndNxSetDump(s_settings.audio_dump_start, s_settings.audio_dump_seconds);
   yinit.cdcoretype = CDCORE_ISO;
   yinit.carttype = s_settings.cart;
   yinit.regionid = 0;
@@ -1086,9 +1086,19 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     }
     s_input.apply(!DolphinSwitch::RuntimeOverlay::IsInputCaptured());
 
+    if (s_frames_done == 0)
+      printf("emulation thread on core %d\n", (int)svcGetCurrentProcessorNumber());
+    const u64 exec_start = armGetSystemTick();
     YabauseExec(); // one frame
+    g_nx_prof[NX_PROF_EMU_FRAME] += armTicksToNs(armGetSystemTick() - exec_start) / 1000;
     s_frames_done++;
     s_progress++;
+
+    // Test runs: jump straight to a saved spot
+    if (s_settings.debug_load_state > 0 && s_frames_done == 180) {
+      const int rc = YabLoadStateSlot(stateDirectory().c_str(), (u8)s_settings.debug_load_state);
+      printf("debug.load_state: slot %d: %d\n", s_settings.debug_load_state, rc);
+    }
 
     // Persist save RAM changes every couple of seconds
     if (s_frames_done % 120 == 0)
@@ -1105,13 +1115,34 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
       const double fps = stats_frames * 1e9 / (double)elapsed_ns;
       int late = 0, resyncs = 0, audio_boosts = 0;
       VDP2TakePacingStats(&late, &resyncs, &audio_boosts);
-      const u32 underruns = SNDSDLTakeUnderruns();
+      SndNxStats snd;
+      SndNxTakeStats(&snd);
       const u32 swaps = s_swap_count.exchange(0);
       const u64 swap_total = s_swap_ns_total.exchange(0);
       const u64 swap_max = s_swap_ns_max.exchange(0);
       printf("frames/s %.1f, game code '%s', late %d, resync %d, sound low %d, sound dry %u, "
-             "swap avg %.1f max %.1f ms\n", fps, Cs2GetCurrentGmaecode(), late, resyncs, audio_boosts,
-             (unsigned)underruns, swaps ? swap_total / 1e6 / swaps : 0.0, swap_max / 1e6);
+             "dropped %u, fill avg %u min %u, rate %.4f, swap avg %.1f max %.1f ms\n",
+             fps, Cs2GetCurrentGmaecode(), late, resyncs, audio_boosts,
+             (unsigned)snd.underruns, (unsigned)snd.dropped, (unsigned)snd.fill_avg, (unsigned)snd.fill_min,
+             snd.ratio, swaps ? swap_total / 1e6 / swaps : 0.0, swap_max / 1e6);
+      {
+        // Per-frame averages in ms
+        double p[NX_PROF_COUNT];
+        for (int k = 0; k < NX_PROF_COUNT; k++) {
+          p[k] = g_nx_prof[k] / 1000.0 / (stats_frames ? stats_frames : 1);
+          g_nx_prof[k] = 0;
+        }
+        printf("  ms/frame: frame %.2f | emu waits vin %.2f vout %.2f vdp1 %.2f vdp1read %.2f scsp %.2f | "
+               "scsp thread busy %.2f preempted %.2f poll %.2f framewait %.2f lag %.0f short %.0f cyc | render drawend %.2f limit %.2f sync %.2f vout %.2f\n",
+               p[NX_PROF_EMU_FRAME], p[NX_PROF_E_VIN], p[NX_PROF_E_VOUT], p[NX_PROF_E_VDP1],
+               p[NX_PROF_E_VDP1READ], p[NX_PROF_E_SCSP], p[NX_PROF_SCSP_BUSY], p[NX_PROF_SCSP_PREEMPT], p[NX_PROF_SCSP_POLL], p[NX_PROF_SCSP_FRAMEWAIT], p[NX_PROF_SCSP_LAG] * 1000, p[NX_PROF_SCSP_SHORT] * 1000, p[NX_PROF_R_DRAWEND], p[NX_PROF_R_LIMIT], p[NX_PROF_R_SYNC],
+               p[NX_PROF_R_VOUT]);
+      }
+      {
+        u32 pc = 0, sr = 0; int running = 0;
+        NxSoundCpuStatus(&pc, &running, &sr);
+        printf("  68000: %s pc %06X sr %04X\n", running ? "running" : "stopped", (unsigned)pc, (unsigned)sr);
+      }
       nx::overlay::setFps((float)fps);
       stats_frames = 0;
       stats_start = armGetSystemTick();

@@ -82,6 +82,9 @@ struct Settings {
   bool vsync = false;             // the emulator's own limiter already paces frames
   bool sync_render = true;        // Vdp2SyncVBlankOut
   int scsp_sync_per_frame = 1;
+  int audio_dump_start = 0;       // debug: audio.dump_start / audio.dump_seconds
+  int audio_dump_seconds = 0;
+  int debug_load_state = 0;       // debug: load this state slot 3 s after boot (testing)
   int scsp_main_mode = 0;         // 0 .. sound CPU locked to emulated time, 1 .. real time
   std::string bios = "auto";      // auto (by disc region), jp, us or hle (emulated BIOS)
 };

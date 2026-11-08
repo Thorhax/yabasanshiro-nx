@@ -116,6 +116,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #include "m68kcore.h"
 #include "scu.h"
 #include "yabause.h"
+#include "vdp2.h"
 #include "scsp.h"
 #include "scspdsp.h"
 #include "threads.h"
@@ -5485,6 +5486,31 @@ void new_scsp_update_samples(s32 *bufL, s32 *bufR, int scspsoundlen)
    new_scsp_outbuf_pos = 0;
 }
 
+#if defined(NX)
+// The Switch's sound thread runs behind the SH-2s without a per-frame handshake,
+// so it can be mid-way through 68000 work when a state is saved or loaded. Let
+// it catch up first, park it, and after the state is in place start it again
+// from the current counters, so it never runs old cycles on a loaded 68000.
+static volatile int g_scsp_parked = 0;
+static volatile int g_scsp_resync = 0;
+extern "C" u64 getM68kDoneCounter(void);
+
+void ScspLockThread() {
+  const s64 t0 = YabauseGetTicks();
+  while (thread_running && g_scsp_lock == 0 &&
+         (getM68KCounter() >> SCSP_FRACTIONAL_BITS) > getM68kDoneCounter() &&
+         YabauseGetTicks() - t0 < 200000)
+    YabThreadUSleep(100);
+  g_scsp_lock = 1;
+  while (thread_running && !g_scsp_parked && YabauseGetTicks() - t0 < 300000)
+    YabThreadUSleep(100);
+}
+
+void ScspUnLockThread() {
+  g_scsp_resync = 1;
+  g_scsp_lock = 0;
+}
+#else
 void ScspLockThread() {
   g_scsp_lock = 1;
   YabThreadUSleep(16666*2);
@@ -5493,6 +5519,7 @@ void ScspLockThread() {
 void ScspUnLockThread() {
   g_scsp_lock = 0;
 }
+#endif
 
 
 //////////////////////////////////////////////////////////////////////////////
@@ -5546,20 +5573,46 @@ extern "C" void * ScspAsynMainCpuTime( void * p ){
   now = 0;
   before = 0;
   while (thread_running){
+#if defined(NX)
+    if (g_scsp_lock) {
+      g_scsp_parked = 1;
+      while (g_scsp_lock && thread_running) { YabThreadUSleep(500); }
+      g_scsp_parked = 0;
+    }
+    if (g_scsp_resync) {
+      // Drop cycles handed out before a state load
+      g_scsp_resync = 0;
+      pre_m68k_cycle = getM68KCounter() >> SCSP_FRACTIONAL_BITS;
+      m68k_inc = 0;
+      setM68kDoneCounter(pre_m68k_cycle);
+    }
+#else
     while (g_scsp_lock) { YabThreadUSleep(1000); }
+#endif
     u64 m68k_done_counter = 0;
     u64 m68k_integer_part = 0;
     u64 m68k_cycle = 0;
+    s64 last_poll = YabauseGetTicks();
+    const s64 poll_start = last_poll;
     do {
       m68k_integer_part = getM68KCounter() >> SCSP_FRACTIONAL_BITS;
       m68k_cycle = m68k_integer_part - pre_m68k_cycle;
       if (thread_running == 0) break;
+      const s64 t = YabauseGetTicks();
+      if (t - last_poll > 20) g_nx_prof[NX_PROF_SCSP_PREEMPT] += (u64)(t - last_poll);
+      last_poll = t;
+#if defined(NX)
+      // Nothing to do for a while (game paused, loading): stop spinning the core
+      if (m68k_cycle == 0 && t - poll_start > 2000) YabThreadUSleep(500);
+#endif
     } while (m68k_cycle == 0);
+    g_nx_prof[NX_PROF_SCSP_POLL] += (u64)(YabauseGetTicks() - poll_start);
 
     m68k_inc += m68k_cycle;
     pre_m68k_cycle = m68k_integer_part;
 
     // Sync 44100KHz
+    const s64 busy_start = YabauseGetTicks();
     while (m68k_inc >= samplecnt) {
       m68k_inc = m68k_inc - samplecnt;
       //LOG("[SCSP] MM68KExec %d", samplecnt);
@@ -5578,12 +5631,22 @@ extern "C" void * ScspAsynMainCpuTime( void * p ){
         ScspInternalVars->scsptiming2 = 0;
         ScspInternalVars->scsptiming1 = scsplines;
         ScspExecAsync();
+#if defined(NX)
+        // No per-frame handshake on the Switch: the counters only ever grow and the
+        // SH-2 side waits only when this thread falls too far behind (yabause.c,
+        // NxWaitForSoundCpu). Upstream stopped here until the SH-2s reached the next
+        // VBlank-IN, then had them wait at VBlank-IN until this thread caught up
+        // with the budget handed out in a burst while they idled before it.
+        continue;
+#endif
 
         YabAddEventQueue( q_scsp_finish , 0);
         pre_m68k_cycle = 0;
         m68k_inc = 0;
         //LOG("[SCSP] WAIT SH2");
+        { const s64 w0 = YabauseGetTicks();
         YabWaitEventQueue(q_scsp_frame_start);
+        g_nx_prof[NX_PROF_SCSP_FRAMEWAIT] += (u64)(YabauseGetTicks() - w0); }
         now = YabauseGetTicks();
         //LOG(" SCSPTIME = %d/16666666 %d/735", (s32)(now - before), hzcheck);
         hzcheck = 0;
@@ -5591,6 +5654,7 @@ extern "C" void * ScspAsynMainCpuTime( void * p ){
         break;
       }
     }
+    g_nx_prof[NX_PROF_SCSP_BUSY] += (u64)(YabauseGetTicks() - busy_start);
     setM68kDoneCounter(pre_m68k_cycle);
   }
   YabThreadWake(YAB_THREAD_SCSP);
@@ -7132,3 +7196,12 @@ ScspSlotDebugAudioSaveWav (u8 slotnum, const char *filename)
 }
 
 //////////////////////////////////////////////////////////////////////////////
+
+#if defined(NX)
+// Port log: what the sound CPU is doing
+extern "C" void NxSoundCpuStatus(u32 * pc, int * running, u32 * sr) {
+  *pc = M68K ? M68K->GetPC() : 0;
+  *running = IsM68KRunning;
+  *sr = M68K ? M68K->GetSR() : 0;
+}
+#endif

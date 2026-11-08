@@ -31,6 +31,7 @@ set(yabause_nx_SOURCES
 	gl_shim.c
 	overlay.cpp
 	cheats.cpp
+	sndnx.cpp
 )
 
 # Dear ImGui (nx/imgui, the version NaGa's frontend uses) for the in-game quick menu

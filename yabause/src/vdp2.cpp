@@ -65,7 +65,7 @@ extern "C" void YglNxVdp1ReadBack(void);
 #if defined(__SWITCH__)
 #include "scsp.h"
 extern "C" {
-#include "sndsdl.h"
+#include "nx/sndnx.h"
 }
 #endif
 #if defined(HAVE_VULKAN)
@@ -74,7 +74,12 @@ extern "C" {
 
 u8 * Vdp2Ram;
 u8 * Vdp2ColorRam;
+#if defined(NX)
+__thread Vdp2 * Vdp2Regs;
+Vdp2 * Vdp2RegsLive;
+#else
 Vdp2 * Vdp2Regs;
+#endif
 Vdp2Internal_struct Vdp2Internal;
 Vdp2External_struct Vdp2External;
 
@@ -117,6 +122,33 @@ extern "C" int Vdp2DisplayEnabledThisFrame(void)
 #endif
 
 int Vdp2SyncVBlankOut = 1;
+
+// Where the time goes, in microseconds, for the port's log (see NX_PROF_* in vdp2.h)
+extern "C" { u64 g_nx_prof[NX_PROF_COUNT]; }
+static inline void nxProfAdd(int slot, s64 start) {
+  g_nx_prof[slot] += (u64)(YabauseGetTicks() - start);
+}
+
+#if defined(NX) && defined(YAB_ASYNC_RENDERING)
+// VBlank-IN without the wait: the emulation thread copies the registers the
+// compositor reads, hands the frame to the render thread and carries on into
+// the blanking period instead of waiting the 2-3 ms the composite takes. It
+// only waits for that frame at the next VBlank-IN (or, with sync_render, at
+// VBlank-OUT, which the render thread reaches after compositing and pacing).
+static Vdp2 s_vin_vdp2;
+static Vdp1 s_vin_vdp1;
+static int s_vin_pending = 0;
+#endif
+
+// Threads see the real VDP registers unless told otherwise (thr-nx.c calls
+// this when a thread starts; the render thread also refreshes it per event,
+// since it starts before the VDP1 registers exist)
+extern "C" void NxThreadInitHook(void) {
+#if defined(NX)
+  Vdp2Regs = Vdp2RegsLive;
+  Vdp1Regs = Vdp1RegsLive;
+#endif
+}
 static s64 syncticks = 0;       // CPU time sync for real time.
 static int vdp_proc_running = 0;
 YabMutex * vrammutex = NULL;
@@ -360,6 +392,9 @@ void FASTCALL Vdp2ColorRamWriteLong(u32 addr, u32 val) {
 int Vdp2Init(void) {
    if ((Vdp2Regs = (Vdp2 *) calloc(1, sizeof(Vdp2))) == NULL)
       return -1;
+#if defined(NX)
+   Vdp2RegsLive = Vdp2Regs;
+#endif
 
    if ((Vdp2Ram = T1MemoryInit(0x80000)) == NULL)
       return -1;
@@ -411,6 +446,9 @@ void Vdp2DeInit(void) {
    if (Vdp2Regs)
       free(Vdp2Regs);
    Vdp2Regs = NULL;
+#if defined(NX)
+   Vdp2RegsLive = NULL;
+#endif
 
    if (Vdp2Ram)
       T1MemoryDeInit(Vdp2Ram);
@@ -520,6 +558,9 @@ void Vdp2Reset(void) {
      YabThreadDestoryQueue(rcv_evqueue);
      rcv_evqueue = YabThreadCreateQueue(8);
    }
+#if defined(NX)
+   s_vin_pending = 0;
+#endif
    if (vdp1_rcv_evqueue != NULL){
      YabThreadDestoryQueue(vdp1_rcv_evqueue);
      vdp1_rcv_evqueue = YabThreadCreateQueue(8);
@@ -546,15 +587,17 @@ extern "C" void * VdpProc( void *arg ){
 
   while( vdp_proc_running ){
     evcode = YabWaitEventQueue(evqueue);
+    NxThreadInitHook();
     switch(evcode){
-    case VDPEV_VBLANK_IN:
+    case VDPEV_VBLANK_IN: {
       FrameProfileAdd("VIN start");
       vdp2VBlankIN();
+      }
       FrameProfileAdd("VIN end");
       break;
     case VDPEV_VBLANK_OUT:
       FrameProfileAdd("VOUT start");
-      vdp2VBlankOUT();
+      { const s64 t0 = YabauseGetTicks(); vdp2VBlankOUT(); nxProfAdd(NX_PROF_R_VOUT, t0); }
       FrameProfileAdd("VOUT end");
       //YabAddEventQueue(vout_rcv_evqueue, 0);
       break;
@@ -792,20 +835,25 @@ void frameSkipAndLimit() {
     const s64 fps = (yabsys.IsPal ? 50 : 60) << frameLimitShift ;
     curticks = YabauseGetTicks();
     framecount++;
-    const s64 deadline = lastticks + (s64)framecount * yabsys.tickfreq / fps;
+    // tickfreq is unsigned: compare against a signed copy, or a negative
+    // diffticks (ahead of schedule) converts to a huge value and every early
+    // frame took the resync path below, so the limiter never slept (1.2.2 ran
+    // games at up to 120 fps and the sound overflowed)
+    const s64 tickfreq = (s64)yabsys.tickfreq;
+    const s64 deadline = lastticks + (s64)framecount * tickfreq / fps;
     diffticks = curticks - deadline;
 
     // Behind schedule, frames run back to back until they catch up, so a few
     // slow frames don't cost emulated time (the sound would underrun). Only a
     // long stall (half a second, e.g. loading) restarts the schedule.
-    if (diffticks > yabsys.tickfreq / 2) {
+    if (diffticks > tickfreq / 2) {
       pacingResyncs++;
       lastticks = curticks;
       framecount = 0;
       return;
     }
 
-    if (diffticks > yabsys.tickfreq / (fps * 2)) {
+    if (diffticks > tickfreq / (fps * 2)) {
       pacingLateFrames++;
     }
 
@@ -814,10 +862,10 @@ void frameSkipAndLimit() {
     // stretch drains the sound buffer. While less than two frames of sound
     // are queued, move the schedule 1 ms earlier per frame (at most 6% fast)
     // so the buffer refills instead of running dry.
-    if (diffticks < 0 && SNDSDLBufferedSamples() < (u32)(44100 * 2 / fps)) {
+    if (diffticks < 0 && SndNxBufferedSamples() < (u32)(44100 * 2 / fps)) {
       pacingAudioBoosts++;
-      lastticks -= yabsys.tickfreq / 1000;
-      diffticks += yabsys.tickfreq / 1000;
+      lastticks -= tickfreq / 1000;
+      diffticks += tickfreq / 1000;
     }
 #endif
 
@@ -865,12 +913,27 @@ void vdp2VBlankIN(void) {
    now we're lying a little here as we're not swapping the framebuffers. */
    //if (Vdp1External.manualchange) Vdp1Regs->EDSR >>= 1;
 
+   s64 t0 = YabauseGetTicks();
+#if defined(NX)
+   // Composite from the registers as they were at VBlank-IN
+   Vdp2Regs = &s_vin_vdp2;
+   Vdp1Regs = &s_vin_vdp1;
    VIDCore->Vdp2DrawEnd();
+   NxThreadInitHook();
+#else
+   VIDCore->Vdp2DrawEnd();
+#endif
+   nxProfAdd(NX_PROF_R_DRAWEND, t0); t0 = YabauseGetTicks();
    frameSkipAndLimit();
+   nxProfAdd(NX_PROF_R_LIMIT, t0); t0 = YabauseGetTicks();
    VIDCore->Sync();
+   nxProfAdd(NX_PROF_R_SYNC, t0);
+#if !defined(NX)
+   // The NX emulation thread does these itself (Vdp2VBlankIN)
    Vdp2Regs->TVSTAT |= 0x0008;
 
    ScuSendVBlankIN();
+#endif
 
    //if (yabsys.IsSSH2Running)
    //   SH2SendInterrupt(SSH2, 0x43, 0x6);
@@ -897,11 +960,32 @@ void Vdp2VBlankIN(void) {
 */
 
   FrameProfileAdd("VIN event");
+#if defined(NX)
+  {
+    // The previous frame must be composited before its register copy is reused
+    const s64 t0 = YabauseGetTicks();
+    if (s_vin_pending)
+      YabWaitEventQueue(rcv_evqueue);
+    nxProfAdd(NX_PROF_E_VIN, t0);
+  }
+  memcpy(&s_vin_vdp2, Vdp2Regs, sizeof(Vdp2));
+  memcpy(&s_vin_vdp1, Vdp1Regs, sizeof(Vdp1));
   YabAddEventQueue(evqueue,VDPEV_VBLANK_IN);
+  s_vin_pending = 1;
+  Vdp2Regs->TVSTAT |= 0x0008;
+  ScuSendVBlankIN();
+  if (0) {
+#else
+  YabAddEventQueue(evqueue,VDPEV_VBLANK_IN);
+  {
+#endif
 
    // sync
   //do {
+    const s64 t0 = YabauseGetTicks();
     YabWaitEventQueue(rcv_evqueue);
+    nxProfAdd(NX_PROF_E_VIN, t0);
+  }
   //} while (YaGetQueueSize(rcv_evqueue) != 0);
    FrameProfileAdd("VIN sync");
 
@@ -1095,7 +1179,9 @@ void Vdp2HBlankOUT(void) {
     vout_display_enabled = (Vdp2Regs->TVMD & 0x8000) != 0;
     YabAddEventQueue(evqueue, VDPEV_VBLANK_OUT);
     if (Vdp2SyncVBlankOut) {
+      const s64 t0 = YabauseGetTicks();
       YabWaitEventQueue(vout_rcv_evqueue);
+      nxProfAdd(NX_PROF_E_VOUT, t0);
     } else {
       YabThreadYield();
     }
@@ -1104,7 +1190,9 @@ void Vdp2HBlankOUT(void) {
   }
   if (yabsys.wait_line_count != -1 && yabsys.LineCount == yabsys.wait_line_count) {
     FRAMELOG("**WAIT START %d %d**", yabsys.wait_line_count, YaGetQueueSize(vdp1_rcv_evqueue));
+    { const s64 t0 = YabauseGetTicks();
     YabWaitEventQueue(vdp1_rcv_evqueue); // sync VOUT
+    nxProfAdd(NX_PROF_E_VDP1, t0); }
     YabClearEventQueue(vdp1_rcv_evqueue);
     FRAMELOG("**WAIT END**");
     yabsys.wait_line_count = -1;
@@ -2654,8 +2742,10 @@ void VdpRevoke( void ){
 
 #ifdef NX
 void VdpNxReadVdp1FrameBuffer( void ){
+  const s64 t0 = YabauseGetTicks();
 	YabAddEventQueue(evqueue,VDPEV_NX_READ_VDP1);
   YabWaitEventQueue(command_);
+  nxProfAdd(NX_PROF_E_VDP1READ, t0);
 }
 #endif
 

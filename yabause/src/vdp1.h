@@ -141,7 +141,13 @@ void FASTCALL Vdp1FrameBufferWriteLong(u32, u32);
 void Vdp1DrawCommands(u8 * ram, Vdp1 * regs, u8* back_framebuffer);
 void Vdp1FakeDrawCommands(u8 * ram, Vdp1 * regs);
 
+#if defined(NX)
+// Per thread on the Switch, like Vdp2Regs (see vdp2.h)
+extern __thread Vdp1 * Vdp1Regs;
+extern Vdp1 * Vdp1RegsLive;
+#else
 extern Vdp1 * Vdp1Regs;
+#endif
 
 enum VDP1STATUS {
   VDP1_STATUS_IDLE = 0,

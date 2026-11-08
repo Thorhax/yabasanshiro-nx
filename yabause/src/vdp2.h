@@ -382,7 +382,16 @@ typedef struct {
    u16 COBB;   // 0x25F8011E
 } Vdp2;
 
+#if defined(NX)
+// Per thread on the Switch: the render thread composites a frame from a copy of
+// the registers taken at VBlank-IN while the emulation thread runs on and
+// changes the real ones (vdp2.cpp, Vdp2VBlankIN). Every other thread sees the
+// real registers, Vdp2RegsLive.
+extern __thread Vdp2 * Vdp2Regs;
+extern Vdp2 * Vdp2RegsLive;
+#else
 extern Vdp2 * Vdp2Regs;
+#endif
 
 typedef struct {
    int ColorMode;
@@ -449,6 +458,29 @@ void VdpResume(void);
 
 void VDP2SetFrameLimit(int mode);
 void VDP2TakePacingStats(int * late, int * resyncs, int * audioboosts);
+
+// Switch port timing, microseconds summed since the log last cleared them.
+// E_* = emulation thread waiting, R_* = render thread working.
+enum {
+  NX_PROF_E_VIN,       // VBlank-IN: waits for the frame's draw + limiter + GPU sync
+  NX_PROF_E_VOUT,      // VBlank-OUT: waits until the renderer has read the VDP2 state
+  NX_PROF_E_VDP1,      // waits for VDP1 drawing
+  NX_PROF_E_VDP1READ,  // waits for a VDP1 framebuffer read back
+  NX_PROF_R_DRAWEND,   // Vdp2DrawEnd (composite and present)
+  NX_PROF_R_LIMIT,     // frame limiter sleep
+  NX_PROF_R_SYNC,      // VIDCore->Sync (GPU wait)
+  NX_PROF_R_VOUT,      // VBlank-OUT work: VDP1 draw, VDP2 layer setup
+  NX_PROF_EMU_FRAME,   // YabauseExec wall time
+  NX_PROF_E_SCSP,      // VBlank-IN: waits for the sound CPU to finish the frame
+  NX_PROF_SCSP_BUSY,   // sound thread running the 68000 and the SCSP
+  NX_PROF_SCSP_LAG,    // 68000 cycles the sound thread is behind at VBlank-IN (not us)
+  NX_PROF_SCSP_PREEMPT, // sound thread off its core while it was polling
+  NX_PROF_SCSP_POLL,    // sound thread polling for cycles
+  NX_PROF_SCSP_FRAMEWAIT, // sound thread waiting for the next frame to start
+  NX_PROF_SCSP_SHORT,  // 68000 cycles of the frame not yet handed out at VBlank-IN (not us)
+  NX_PROF_COUNT
+};
+extern u64 g_nx_prof[NX_PROF_COUNT];
 
 Vdp2 * Vdp2RestoreRegs(int line, Vdp2* lines);
 

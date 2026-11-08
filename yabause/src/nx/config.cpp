@@ -264,6 +264,9 @@ Settings loadSettings(const std::vector<std::string> & game_inis)
   s.aspect_mode = ini.getInt("video.aspect", s.aspect_mode);
   s.vsync = ini.getBool("video.vsync", s.vsync);
   s.sync_render = ini.getBool("video.sync_render", s.sync_render);
+  s.audio_dump_start = ini.getInt("audio.dump_start", s.audio_dump_start);
+  s.audio_dump_seconds = ini.getInt("audio.dump_seconds", s.audio_dump_seconds);
+  s.debug_load_state = ini.getInt("debug.load_state", s.debug_load_state);
   return s;
 }
 

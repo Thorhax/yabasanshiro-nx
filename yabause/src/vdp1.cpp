@@ -67,7 +67,12 @@ u8 * Vdp1FrameBuffer[2];
 VideoInterface_struct *VIDCore = NULL;
 extern VideoInterface_struct *VIDCoreList[];
 extern YabEventQueue * rcv_evqueue;
+#if defined(NX)
+__thread Vdp1 * Vdp1Regs;
+Vdp1 * Vdp1RegsLive;
+#else
 Vdp1 * Vdp1Regs;
+#endif
 Vdp1External_struct Vdp1External = { 0 };
 }
 
@@ -248,6 +253,9 @@ extern "C" void FASTCALL Vdp1FrameBufferWriteLong(u32 addr, u32 val) {
 extern "C" int Vdp1Init(void) {
    if ((Vdp1Regs = (Vdp1 *) malloc(sizeof(Vdp1))) == NULL)
       return -1;
+#if defined(NX)
+   Vdp1RegsLive = Vdp1Regs;
+#endif
 
    memset(Vdp1Regs, 0, sizeof(Vdp1Regs));      
 
@@ -277,6 +285,9 @@ extern "C" void Vdp1DeInit(void) {
    if (Vdp1Regs)
       free(Vdp1Regs);
    Vdp1Regs = NULL;
+#if defined(NX)
+   Vdp1RegsLive = NULL;
+#endif
 
    if (Vdp1Ram)
       T1MemoryDeInit(Vdp1Ram);
@@ -465,9 +476,11 @@ extern "C" void FASTCALL Vdp1WriteWord(u32 addr, u16 val) {
         FRAMELOG("[VDP1] VDPEV_DIRECT_DRAW %d/%d", YaGetQueueSize(vdp1_rcv_evqueue), yabsys.LineCount);
         if ( YaGetQueueSize(vdp1_rcv_evqueue) > 0){
           yabsys.wait_line_count = -1;
+          const s64 t0 = YabauseGetTicks();
           do{
             YabWaitEventQueue(vdp1_rcv_evqueue);
           } while (YaGetQueueSize(vdp1_rcv_evqueue) != 0);
+          g_nx_prof[NX_PROF_E_VDP1] += (u64)(YabauseGetTicks() - t0);
         }
         Vdp1Regs->EDSR >>= 1;
         yabsys.wait_line_count = yabsys.LineCount + 50;

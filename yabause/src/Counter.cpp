@@ -56,6 +56,10 @@ extern "C" {
     m68k_counter_done = counter;
   }
 
+  u64 getM68kDoneCounter(void) {
+    return m68k_counter_done;
+  }
+
   u64 getM68KCounter() {
      return m68k_counter;
   }

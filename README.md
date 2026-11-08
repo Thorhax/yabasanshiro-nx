@@ -96,8 +96,17 @@ Default Saturn pad mapping (changeable globally or per game under **Settings →
 Changing the **Aspect ratio** in the quick menu (left / right) takes effect when the game
 resumes and is saved as that game's own setting, the same one as on its Video settings page.
 
-If a game freezes, try turning off **Rotating background on GPU** in its Video settings
-(Sonic R freezes when loading a race with it on).
+**Rotating background on GPU** (Video settings) is off by default since 1.3.0: the GPU version can
+freeze the console's graphics driver (Bulk Slash stage 1, Sonic R when loading a race), and the
+CPU version keeps those games at full speed. Turn it on only if a game is too slow without it.
+
+Some games come with settings of their own that the app applies automatically (a game's own
+settings page still overrides them). At the moment: **Fighters Megamix** runs on the SH-2
+interpreter, because with the dynamic recompiler its CD loading after the intro never finishes.
+
+Save states made before 1.3.0 didn't store the sound CPU's registers. They still load, but the
+sound CPU restarts, so a game may stay silent until it plays its next sound or music; make a new
+save state with 1.3.0 or later.
 
 Controller types:
 

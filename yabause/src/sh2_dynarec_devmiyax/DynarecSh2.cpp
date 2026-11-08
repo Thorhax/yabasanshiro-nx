@@ -831,7 +831,22 @@ Block * CompileBlocks::CompileBlock(u32 pc, addrs * ParentT = NULL)
 
 
   //LOG("%d,%08X is compiled",blockCount,pc );
+  bad_pc_ = 0;
+  bad_branch_pc_ = 0;
   if (EmmitCode(&g_CompleBlock[blockCount], ParentT) != 0) {
+    if (bad_branch_pc_ != 0 && bad_branch_pc_ != pc) {
+      // Compile what comes before the branch; the branch then starts a block
+      // of its own, which fails and raises the exception at the slot
+      const u32 bad = bad_pc_, branch = bad_branch_pc_;
+      stop_addr_ = branch;
+      const int rc = EmmitCode(&g_CompleBlock[blockCount], ParentT);
+      stop_addr_ = 0;
+      bad_pc_ = bad;
+      bad_branch_pc_ = branch;
+      if (rc == 0)
+        return &g_CompleBlock[blockCount];
+    }
+    g_CompleBlock[blockCount].b_addr = 0;
     return NULL;
   }
 
@@ -1057,6 +1072,10 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
   //MaxSize = MAXBLOCKSIZE - MAXINSTRSIZE- delay_seperator_size - SEPERATORSIZE_DELAY_AFTER - nomal_seperator_size - EPILOGSIZE;
   //while (ptr - startptr < MaxSize) {
   while (1) {
+    // A retry after an undefined opcode in a delay slot: end before the branch
+    if (stop_addr_ != 0 && addr == stop_addr_ && addr != start_addr)
+      break;
+
     // translate the opcode and insert code
     op = MappedMemoryReadInst(addr, NULL);
 #ifdef SET_DIRTY
@@ -1077,6 +1096,14 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
     i = dsh2_instructions[op];
     if (asm_list[i].func == 0) {
       LOG("bad instruction code @ PC=%08X code=%04X\n", addr, op );
+      // End the block before it, so the instructions before it run and the
+      // illegal-instruction exception is raised at its own address with the
+      // right return address, as on the interpreter (failing the whole block
+      // raised it at the block start).
+      bad_pc_ = addr;
+      bad_branch_pc_ = 0;
+      if (addr != start_addr)
+        break;
       return -1;  // bad instruction code
     }
 
@@ -1287,6 +1314,10 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
 #endif
       if (asm_list[j].func == 0) {
         LOG("Unimplemented Opcode (0x%4x) at 0x%8x\n", temp, addr-2);
+        // Undefined opcode in a delay slot: the caller retries the block
+        // ending before the branch, then raises the exception at the slot
+        bad_pc_ = addr - 2;
+        bad_branch_pc_ = addr - 4;
         return -1;
         break;
       }
@@ -1567,6 +1598,12 @@ int DynarecSh2::CheckOneStep() {
 void DynarecSh2::Undecoded(){
 
   LOG("Undecoded %08X", GET_PC());
+  // At the undefined opcode itself (it may be past the block start, in a
+  // branch's delay slot), as the interpreter does
+  if (m_pCompiler->bad_pc_ != 0) {
+    SET_PC(m_pCompiler->bad_pc_);
+    m_pCompiler->bad_pc_ = 0;
+  }
   // Save regs.SR on stack
   GetGenRegPtr()[15] -= 4;
   MappedMemoryWriteLong(GetGenRegPtr()[15], GET_SR(),NULL);

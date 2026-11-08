@@ -314,6 +314,13 @@ public:
 
   std::unordered_map<u32, int> self_modify_block;
 
+  // Undefined opcodes: where the last failed compile stopped (bad_pc_), and
+  // the branch whose delay slot held it (bad_branch_pc_, 0 if none).
+  // stop_addr_ makes EmmitCode end a block before that address.
+  u32 bad_pc_ = 0;
+  u32 bad_branch_pc_ = 0;
+  u32 stop_addr_ = 0;
+
   inline void setDirty(u32 addr)
   {
     addr = adress_mask(addr);

@@ -165,10 +165,48 @@ static void M68KMusashiSetWriteW(M68K_WRITE *Func) {
    rw_funcs.w_16 = Func;
 }
 
+// The sound CPU's state. These were empty, so save states never kept the
+// 68000's registers: after a load it carried on from wherever it was in the
+// running game, over the loaded sound RAM (heard as a stuck loop or silence).
+static const int kMusashiRegs[] = {
+   M68K_REG_D0, M68K_REG_D1, M68K_REG_D2, M68K_REG_D3, M68K_REG_D4, M68K_REG_D5, M68K_REG_D6, M68K_REG_D7,
+   M68K_REG_A0, M68K_REG_A1, M68K_REG_A2, M68K_REG_A3, M68K_REG_A4, M68K_REG_A5, M68K_REG_A6,
+   M68K_REG_USP, M68K_REG_ISP, M68K_REG_MSP, M68K_REG_PC, M68K_REG_VBR, M68K_REG_SFC, M68K_REG_DFC,
+   M68K_REG_PREF_ADDR, M68K_REG_PREF_DATA, M68K_REG_PPC, M68K_REG_IR
+};
+#define MUSASHI_STATE_MAGIC 0x4D75536Bu  /* "MuSk" */
+
 static void M68KMusashiSaveState(FILE *fp) {
+   u32 v[64];
+   int n = 0, i;
+   v[n++] = MUSASHI_STATE_MAGIC;
+   v[n++] = m68k_get_reg(NULL, M68K_REG_SR);
+   for (i = 0; i < (int)(sizeof(kMusashiRegs) / sizeof(kMusashiRegs[0])); i++)
+      v[n++] = m68k_get_reg(NULL, (m68k_register_t)kMusashiRegs[i]);
+   v[n++] = m68ki_cpu.int_level;
+   v[n++] = m68ki_cpu.int_cycles;
+   v[n++] = m68ki_cpu.stopped;
+   v[n++] = m68ki_cpu.instr_mode;
+   v[n++] = m68ki_cpu.run_mode;
+   fwrite(v, sizeof(u32), n, fp);
 }
 
 static void M68KMusashiLoadState(FILE *fp) {
+   u32 v[64];
+   const int count = 1 + 1 + (int)(sizeof(kMusashiRegs) / sizeof(kMusashiRegs[0])) + 5;
+   int n = 0, i;
+   if (fread(v, sizeof(u32), count, fp) != (size_t)count || v[0] != MUSASHI_STATE_MAGIC)
+      return;
+   n = 1;
+   // SR first: it selects which stack pointer A7 is
+   m68k_set_reg(M68K_REG_SR, v[n++]);
+   for (i = 0; i < (int)(sizeof(kMusashiRegs) / sizeof(kMusashiRegs[0])); i++)
+      m68k_set_reg((m68k_register_t)kMusashiRegs[i], v[n++]);
+   m68ki_cpu.int_level = v[n++];
+   m68ki_cpu.int_cycles = v[n++];
+   m68ki_cpu.stopped = v[n++];
+   m68ki_cpu.instr_mode = v[n++];
+   m68ki_cpu.run_mode = v[n++];
 }
 
 M68K_struct M68KMusashi = {

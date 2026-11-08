@@ -6135,7 +6135,8 @@ SoundSaveState (FILE *fp)
   u8 nextphase;
   IOCheck_struct check = { 0, 0 };
 
-  offset = StateWriteHeader (fp, "SCSP", 4);
+  // 5: the 68000's registers are really saved (Musashi's SaveState was empty)
+  offset = StateWriteHeader (fp, "SCSP", 5);
 
   // Save 68k registers first
   ywrite (&check, (void *)&IsM68KRunning, 1, 1, fp);
@@ -6436,7 +6437,14 @@ SoundLoadState (FILE *fp, int version, int size)
   yread(&check, (void *)&savedcycles, sizeof(u32), 1, fp);
 
 #ifdef IMPROVED_SAVESTATES
-  M68K->LoadState(fp);
+  if (version >= 5 || M68K->id != 3)
+    M68K->LoadState(fp);
+  if (version < 5 && M68K->id == 3 /* Musashi saved nothing before version 5 */) {
+    // Nothing to restore the sound CPU from: restart its driver from the
+    // loaded sound RAM rather than run it on from unrelated registers
+    LOG("SCSP state version %d has no 68000 registers: resetting the sound CPU", version);
+    M68K->Reset();
+  }
 #else
   for (i = 0; i < 8; i++)
     {

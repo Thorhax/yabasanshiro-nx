@@ -945,10 +945,10 @@ int YabauseEmulate(void) {
 
 #if defined(NX) && defined(ASYNC_SCSP)
 // The sound thread runs freely behind the SH-2s; once a line, hold the SH-2s
-// while it is more than half a frame of 68000 cycles behind. The counters only
+// while it is more than a frame of 68000 cycles behind. The counters only
 // grow (saved_m68k_cycles is never reset on the Switch), so no per-frame
 // handshake is needed, and the sound CPU's VBlank work overlaps the next frame.
-#define NX_SCSP_MAX_LAG ((u64)(44100 * 256 / 60) / 2)
+#define NX_SCSP_MAX_LAG ((u64)(44100 * 256 / 60))
 static void NxWaitForSoundCpu(void) {
   extern u64 getM68kDoneCounter(void);
   if (g_scsp_main_mode != 0) return;

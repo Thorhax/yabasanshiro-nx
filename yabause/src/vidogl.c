@@ -3739,7 +3739,11 @@ static void FASTCALL Vdp2DrawRotation(RBGDrawInfo * rbg)
 
     if (Vdp2DrawRotationThread_running == 0) {
       Vdp2DrawRotationThread_running = 1;
+#if defined(NX)
+      g_rotate_mtx = YabThreadCreateSemMutex();
+#else
       g_rotate_mtx = YabThreadCreateMutex();
+#endif
       YabThreadLock(g_rotate_mtx);
       YabThreadStart(YAB_THREAD_VIDSOFT_LAYER_RBG0, "vdp rotate", Vdp2DrawRotationThread, NULL);
     }

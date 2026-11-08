@@ -108,6 +108,9 @@ typedef void * YabMutex;
 void YabThreadLock( YabMutex * mtx );
 void YabThreadUnLock( YabMutex * mtx );
 YabMutex * YabThreadCreateMutex();
+#if defined(NX)
+YabMutex * YabThreadCreateSemMutex();
+#endif
 void YabThreadFreeMutex( YabMutex * mtx );
 
 int YabThreadGetFastestCpuIndex();

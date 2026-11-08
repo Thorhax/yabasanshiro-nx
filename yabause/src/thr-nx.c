@@ -256,19 +256,52 @@ int YaGetQueueSize(YabEventQueue * queue_t){
 typedef struct YabMutex_nx
 {
   Mutex mutex;
+  // Binary semaphore mode (YabThreadCreateSemMutex): any thread may unlock
+  int sem;
+  int locked;
+  CondVar cond;
 } YabMutex_nx;
 
 void YabThreadLock( YabMutex * mtx ){
-  mutexLock(&((YabMutex_nx *)mtx)->mutex);
+  YabMutex_nx * m = (YabMutex_nx *)mtx;
+  if (!m->sem) {
+    mutexLock(&m->mutex);
+    return;
+  }
+  mutexLock(&m->mutex);
+  while (m->locked)
+    condvarWait(&m->cond, &m->mutex);
+  m->locked = 1;
+  mutexUnlock(&m->mutex);
 }
 
 void YabThreadUnLock( YabMutex * mtx ){
-  mutexUnlock(&((YabMutex_nx *)mtx)->mutex);
+  YabMutex_nx * m = (YabMutex_nx *)mtx;
+  if (!m->sem) {
+    mutexUnlock(&m->mutex);
+    return;
+  }
+  mutexLock(&m->mutex);
+  m->locked = 0;
+  condvarWakeOne(&m->cond);
+  mutexUnlock(&m->mutex);
 }
 
 YabMutex * YabThreadCreateMutex(){
-  YabMutex_nx * mtx = (YabMutex_nx *)malloc(sizeof(YabMutex_nx));
+  YabMutex_nx * mtx = (YabMutex_nx *)calloc(1, sizeof(YabMutex_nx));
   mutexInit(&mtx->mutex);
+  return (YabMutex *)mtx;
+}
+
+// A lock that one thread takes and another releases. The CPU rotating-
+// background renderer is started and stopped that way, and a libnx mutex
+// can't be released by a thread that doesn't hold it: ending a game hung in
+// VIDOGLDeInit waiting for the renderer thread.
+YabMutex * YabThreadCreateSemMutex(){
+  YabMutex_nx * mtx = (YabMutex_nx *)calloc(1, sizeof(YabMutex_nx));
+  mutexInit(&mtx->mutex);
+  condvarInit(&mtx->cond);
+  mtx->sem = 1;
   return (YabMutex *)mtx;
 }
 

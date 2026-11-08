@@ -1200,7 +1200,14 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
       {
         u32 pc = 0, sr = 0; int running = 0;
         NxSoundCpuStatus(&pc, &running, &sr);
-        printf("  68000: %s pc %06X sr %04X\n", running ? "running" : "stopped", (unsigned)pc, (unsigned)sr);
+        sh2regs_struct mr, sr2;
+        SH2GetRegisters(MSH2, &mr);
+        SH2GetRegisters(SSH2, &sr2);
+        // Where the CPUs are, for diagnosing hangs from a log
+        printf("  cpus: 68000 %s pc %06X sr %04X | msh2 pc %08X ssh2 %s pc %08X | cd status %02X FAD %06X HIRQ %04X play %06X-%06X\n",
+               running ? "running" : "stopped", (unsigned)pc, (unsigned)sr,
+               (unsigned)mr.PC, yabsys.IsSSH2Running ? "on" : "off", (unsigned)sr2.PC, (unsigned)Cs2Area->status, (unsigned)Cs2Area->FAD,
+               (unsigned)Cs2Area->reg.HIRQ, (unsigned)Cs2Area->playFAD, (unsigned)Cs2Area->playendFAD);
       }
       nx::overlay::setFps((float)fps);
       stats_frames = 0;

@@ -225,7 +225,9 @@ static const char * kDefaultSettings =
   "resolution = 0\n"
   "# Rotating background resolution: 0 = original, 1 = 2x, 2 = 720p, 3 = 1080p, 4 = fit\n"
   "rbg_resolution = 0\n"
-  "rbg_compute_shader = on\n"
+  "# Draw the rotating background with a GPU compute shader. Off by default:\n"
+  "# it can freeze the GPU (Bulk Slash, Sonic R), and the CPU keeps up\n"
+  "rbg_gpu = off\n"
   "# 0 = perspective correction, 1 = CPU tessellation, 2 = GPU tessellation\n"
   "polygon_mode = 0\n"
   "# 1 = 4:3 (TV), 0 = square pixels, 2 = 16:9, 3 = stretch\n"
@@ -288,7 +290,9 @@ Settings loadSettings(const std::vector<std::string> & game_inis)
   s.bios = lower(trim(ini.get("emulation.bios", s.bios)));
   s.resolution_mode = ini.getInt("video.resolution", s.resolution_mode);
   s.rbg_resolution_mode = ini.getInt("video.rbg_resolution", s.rbg_resolution_mode);
-  s.rbg_compute_shader = ini.getBool("video.rbg_compute_shader", s.rbg_compute_shader);
+  // Was video.rbg_compute_shader (default on) before 1.3.0; renamed so the
+  // old "on" written into everyone's settings.ini doesn't keep it enabled
+  s.rbg_compute_shader = ini.getBool("video.rbg_gpu", s.rbg_compute_shader);
   s.polygon_mode = ini.getInt("video.polygon_mode", s.polygon_mode);
   s.aspect_mode = ini.getInt("video.aspect", s.aspect_mode);
   s.vsync = ini.getBool("video.vsync", s.vsync);

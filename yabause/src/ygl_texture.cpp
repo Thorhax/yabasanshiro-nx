@@ -158,11 +158,11 @@ const char prg_generate_rbg_base[] =
 "  if (para[paramid].coefdatasize == 2) { \n"
 "    uint addr = ( uint( int(para[paramid].coeftbladdr) + (kindex<<1)) &0x7FFFFu); "
 "    if( para[paramid].k_mem_type == 0) { \n"
-"	     kdata = vram[ addr>>2 ]; \n"
+"	     kdata = vram[ (uint(addr>>2) & 0x1FFFFu) ]; \n"
 "      if( (addr & 0x02u) != 0u ) { kdata >>= 16; } \n"
 "      kdata = (((kdata>>8)&0xFFu) | ((kdata << 8) & 0xFFFFFF00u))&0xFFFFu;\n"
 "    }else{\n"
-"      kdata = cram[ ((0x800u + (addr&0x7FFu))>>2)  ]; \n"
+"      kdata = cram[ (uint(((0x800u + (addr&0x7FFu))>>2)) & 0x3FFu) ]; \n"
 "      if( (addr & 0x02u) != 0u ) { kdata >>= 16; } \n"
 "    }\n"
 "    if ( (kdata & 0x8000u) != 0u) { return -1; }\n"
@@ -170,10 +170,10 @@ const char prg_generate_rbg_base[] =
 "  }else{\n"
 "    uint addr = ( uint( int(para[paramid].coeftbladdr) + (kindex<<2))&0x7FFFFu);"
 "    if( para[paramid].k_mem_type == 0) { \n"
-"	     kdata = vram[ addr>>2 ]; \n"
+"	     kdata = vram[ (uint(addr>>2) & 0x1FFFFu) ]; \n"
 "      kdata = ((kdata&0xFF000000u) >> 24 | ((kdata >> 8) & 0x0000FF00u) | ((kdata<<8) & 0x00FF0000u) | (kdata&0x000000FFu) << 24);\n"
 "    }else{\n"
-"      kdata = cram[ ((0x800u + (addr&0x7FFu) )>>2) ]; \n"
+"      kdata = cram[ (uint(((0x800u + (addr&0x7FFu) )>>2)) & 0x3FFu) ]; \n"
 "      kdata = ((kdata&0xFFFF0000u)>>16|(kdata&0x0000FFFFu)<<16);\n"
 "    }\n"
 "	 if( para[paramid].linecoefenab != 0) lineaddr = (kdata >> 24) & 0x7Fu; else lineaddr = 0u;\n"
@@ -186,11 +186,11 @@ const char prg_generate_rbg_base[] =
 " bool isWindowInside(int posx, int posy) {\n"
 " posy <<= hires_shift;"
 "	if (window_area_mode == 0) {\n"
-"		if (pWinInfo[posy].WinShowLine == 0) {\n"
+"		if (pWinInfo[ (uint(posy) & 511u) ].WinShowLine == 0) {\n"
 "			return true;\n"
 "		}\n"
 "		else {\n"
-"			if (posx < pWinInfo[posy].WinHStart || posx >= pWinInfo[posy].WinHEnd) {\n"
+"			if (posx < pWinInfo[ (uint(posy) & 511u) ].WinHStart || posx >= pWinInfo[ (uint(posy) & 511u) ].WinHEnd) {\n"
 "				return true;\n"
 "			}\n"
 "			else {\n"
@@ -199,11 +199,11 @@ const char prg_generate_rbg_base[] =
 "		}\n"
 "	}\n"
 "	else {\n"
-"		if (pWinInfo[posy].WinShowLine == 0) {\n"
+"		if (pWinInfo[ (uint(posy) & 511u) ].WinShowLine == 0) {\n"
 "			return false;\n"
 "		}\n"
 "		else {\n"
-"			if (posx < pWinInfo[posy].WinHStart || posx >= pWinInfo[posy].WinHEnd) {\n"
+"			if (posx < pWinInfo[ (uint(posy) & 511u) ].WinHStart || posx >= pWinInfo[ (uint(posy) & 511u) ].WinHEnd) {\n"
 "				return false;\n"
 "			}\n"
 "			else {\n"
@@ -217,7 +217,7 @@ const char prg_generate_rbg_base[] =
 "uint get_cram_msb(uint colorindex) { \n"
 "	uint colorval = 0u; \n"
 "	colorindex = (colorindex << cram_shift) & 0xFFFu; \n"
-"	colorval = cram[colorindex >> 2]; \n"
+"	colorval = cram[ (uint(colorindex >> 2) & 0x3FFu) ]; \n"
 "	if ((colorindex & 0x02u) != 0u) { colorval >>= 16; } \n"
 "	return (colorval & 0x8000u); \n"
 "}\n"
@@ -415,7 +415,7 @@ const char prg_rbg_get_patternaddr[] =
 
 const char prg_rbg_get_pattern_data_1w[] =
 "  if( patternname == 0xFFFFFFFFu){\n"
-"    patternname = vram[addr>>2]; \n" // WORD mode( patterndatasize == 1 )
+"    patternname = vram[ (uint(addr>>2) & 0x1FFFFu) ]; \n" // WORD mode( patterndatasize == 1 )
 "    if( (addr & 0x02u) != 0u ) { patternname >>= 16; } \n"
 "    patternname = (((patternname>>8)&0xFFu) | ((patternname << 8) & 0xFFFFFF00u)) & 0xFFFFu;\n"
 "  }\n"
@@ -451,7 +451,7 @@ const char prg_rbg_get_pattern_data_1w[] =
 "  charaddr *= 0x20u;\n";
 
 const char prg_rbg_get_pattern_data_2w[] =
-"  patternname = vram[addr>>2]; \n"
+"  patternname = vram[ (uint(addr>>2) & 0x1FFFFu) ]; \n"
 "  uint tmp1 = patternname & 0x7FFFu; \n"
 "  charaddr = patternname >> 16; \n"
 "  charaddr = (((charaddr>>8)&0xFFu) | ((charaddr << 8) & 0xFFFFFF00u)) & 0xFFFFu;\n"
@@ -507,7 +507,7 @@ const char prg_rbg_getcolor_4bpp[] =
 "  uint cramindex = 0u;\n"
 "  float alpha = alpha_;\n"
 "  uint dotaddr = ((charaddr + uint(((y * cellw) + x) >> 1)) & 0x7FFFFu);\n"
-"  dot = vram[ dotaddr >> 2];\n"
+"  dot = vram[ (uint(dotaddr >> 2) & 0x1FFFFu) ];\n"
 "  if( (dotaddr & 0x3u) == 0u ) dot >>= 0;\n"
 "  else if( (dotaddr & 0x3u) == 1u ) dot >>= 8;\n"
 "  else if( (dotaddr & 0x3u) == 2u ) dot >>= 16;\n"
@@ -548,7 +548,7 @@ const char prg_rbg_getcolor_8bpp[] =
 "  uint cramindex = 0u;\n"
 "  float alpha = alpha_;\n"
 "  uint dotaddr = charaddr + uint((y*cellw)+x);\n"
-"  dot = vram[ dotaddr >> 2];\n"
+"  dot = vram[ (uint(dotaddr >> 2) & 0x1FFFFu) ];\n"
 "  if( (dotaddr & 0x3u) == 0u ) dot >>= 0;\n"
 "  else if( (dotaddr & 0x3u) == 1u ) dot >>= 8;\n"
 "  else if( (dotaddr & 0x3u) == 2u ) dot >>= 16;\n"
@@ -588,7 +588,7 @@ const char prg_rbg_getcolor_16bpp_palette[] =
 "  uint cramindex = 0u;\n"
 "  float alpha = alpha_;\n"
 "  uint dotaddr = charaddr + uint((y*cellw)+x) * 2u;\n"
-"  dot = vram[dotaddr>>2]; \n"
+"  dot = vram[ (uint(dotaddr>>2) & 0x1FFFFu) ]; \n"
 "  if( (dotaddr & 0x02u) != 0u ) { dot >>= 16; } \n"
 "  dot = (((dot>>8)&0xFFu) | ((dot << 8) & 0xFFFFFF00u))&0xFFFFu;\n"
 "  //dot = (((dot) >> 8 & 0xFF) | ((dot) & 0xFF) << 8);\n"
@@ -604,7 +604,7 @@ const char prg_rbg_getcolor_16bpp_rbg[] =
 "  uint cramindex = 0u;\n"
 "  float alpha = alpha_;\n"
 "  uint dotaddr = charaddr + uint((y*cellw)+x) * 2u;\n"
-"  dot = vram[dotaddr>>2]; \n"
+"  dot = vram[ (uint(dotaddr>>2) & 0x1FFFFu) ]; \n"
 "  if( (dotaddr & 0x02u) != 0u ) { dot >>= 16; } \n"
 "  dot = (((dot>>8)&0xFFu) | ((dot << 8) & 0xFFFFFF00u))&0xFFFFu;\n"
 "  //dot = (((dot >> 8) & 0xFFu) | ((dot) & 0xFFu) << 8);\n"
@@ -621,7 +621,7 @@ const char prg_rbg_getcolor_32bpp_rbg[] =
 "  uint cramindex = 0u;\n"
 "  float alpha = alpha_;\n"
 "  uint dotaddr = charaddr + uint((y*cellw)+x) * 4u;\n"
-"  dot = vram[dotaddr>>2]; \n"
+"  dot = vram[ (uint(dotaddr>>2) & 0x1FFFFu) ]; \n"
 "  dot = ((dot&0xFF000000u) >> 24 | ((dot >> 8) & 0x0000FF00u) | ((dot<<8) & 0x00FF0000u) | (dot&0x000000FFu) << 24);\n"
 "  if ( (dot&0x80000000u) == 0u && transparencyenable != 0 ) { \n"
 "    cramindex = 0u; \n"
@@ -2534,10 +2534,30 @@ public:
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo_vram_);
     //glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 0x80000, (void*)Vdp2Ram);
+#if defined(NX)
+    // Fresh storage each time (no wait for the GPU, which may still be reading
+    // the last copy), mapped only for the copy. Upstream mapped it at the end
+    // of every frame and kept it mapped across GL work: on nouveau that hung
+    // the GPU (Bulk Slash stage 1, Sonic R).
+    if (mapped_vram != nullptr) {
+      glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+      mapped_vram = nullptr;
+    }
+    {
+      void * dst = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, 0x80000, GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+      if (dst) {
+        memcpy(dst, Vdp2Ram, 0x80000);
+        glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+      } else {
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 0x80000, (void*)Vdp2Ram);
+      }
+    }
+#else
     if (mapped_vram == nullptr) mapped_vram = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, 0x80000, GL_MAP_WRITE_BIT );
     memcpy(mapped_vram, Vdp2Ram, 0x80000);
     glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
     mapped_vram = nullptr;
+#endif
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, ssbo_vram_);
     ErrorHandle("glBindBufferBase");
 
@@ -2639,6 +2659,9 @@ public:
 
   //-----------------------------------------------
   void onFinish() {
+#if defined(NX)
+    return;  // see update(): no mapping kept across frames
+#endif
     if (ssbo_vram_ != 0 && mapped_vram == nullptr) {
       glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo_vram_);
       mapped_vram = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, 0x80000, GL_MAP_WRITE_BIT );

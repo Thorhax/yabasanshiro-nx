@@ -59,8 +59,6 @@ static YabThreadNx threads[YAB_NUM_THREADS];
 // YAB_NUM_THREADS for threads not started by YabThreadStart (e.g. main)
 static __thread int current_id = YAB_NUM_THREADS;
 
-static Mutex core_mutex;
-static int next_core = 0;
 
 int YabThreadInit(){
     return 0;
@@ -280,15 +278,16 @@ void YabThreadFreeMutex( YabMutex * mtx ){
 
 //////////////////////////////////////////////////////////////////////////////
 
-// All three application cores are identical, so "fastest" just means
-// "not handed out yet": spread the emulator's busy threads across them.
+// Cores by role: 0 for the emulation thread (the SH-2s), 2 for the sound CPU,
+// which spins while it waits, and 1 for the renderer and the helpers. Handing
+// cores out in turn put the fourth thread (the CPU rotating-background
+// renderer, which also spins) on core 0 with the SH-2s.
 int YabThreadGetFastestCpuIndex(){
-  int core;
-  mutexLock(&core_mutex);
-  core = next_core;
-  next_core = (next_core + 1) % NX_APP_CORES;
-  mutexUnlock(&core_mutex);
-  return core;
+  switch (current_id) {
+  case YAB_NUM_THREADS: return 0;   // not one of ours: the main (emulation) thread
+  case YAB_THREAD_SCSP: return 2;
+  default:              return 1;
+  }
 }
 
 void YabThreadSetCurrentThreadAffinityMask(int mask)

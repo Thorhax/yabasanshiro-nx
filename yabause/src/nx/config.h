@@ -77,7 +77,7 @@ struct Settings {
   bool dynarec = true;
   int resolution_mode = 0;        // RES_* in ygl.h
   int rbg_resolution_mode = 0;    // RBG_RES_* in ygl.h
-  bool rbg_compute_shader = true;
+  bool rbg_compute_shader = false;  // video.rbg_gpu
   int polygon_mode = 0;           // PERSPECTIVE_CORRECTION / CPU_ / GPU_TESSERATION
   bool frameskip = false;
   int framelimit = 0;             // 0 .. 60Hz, 1 .. no limit, 2 .. 120Hz

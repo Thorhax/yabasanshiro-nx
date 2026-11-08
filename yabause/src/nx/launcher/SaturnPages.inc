@@ -81,9 +81,9 @@ constexpr SaturnOption SATURN_VIDEO_OPTIONS[] = {
     {"video", "rbg_resolution", "Rotating background", "0", SATURN_RBG_RESOLUTIONS,
      "Resolution of the Saturn's rotating background layer, used for 3D floors, roads and "
      "skies in many games."},
-    {"video", "rbg_compute_shader", "Rotating background on GPU", "on", SATURN_ON_OFF,
-     "Draws the rotating background layer with a GPU compute shader instead of the CPU. Faster; "
-     "turn it off if a game's floors or roads look wrong."},
+    {"video", "rbg_gpu", "Rotating background on GPU", "off", SATURN_ON_OFF,
+     "Draws the rotating background layer with a GPU compute shader instead of the CPU. Can "
+     "freeze some games (Bulk Slash, Sonic R); only worth trying if a game is too slow."},
     {"video", "polygon_mode", "Polygon drawing", "0", SATURN_POLYGON_MODES,
      "How the Saturn's four-cornered polygons are drawn. Perspective correction is fastest; "
      "tessellation splits them up for more accurate textures at a GPU cost."},

@@ -490,6 +490,57 @@ static void sampleThread(const char * name, Handle h)
   svcSetThreadActivity(h, ThreadActivity_Runnable);
 }
 
+// Sampling profiler for test runs ([debug] profile_start / profile_seconds):
+// every 0.5 ms pause the emulation thread, note its pc and lr, and write them
+// to profile.bin (u64 base, u64 depth, then per sample pc, lr and up to 6
+// return addresses from the frame-pointer chain, 0 padded). tools: rig/prof.py
+static std::atomic<bool> s_profile_stop{false};
+static void profilerMain(void * arg)
+{
+  const int start_s = s_settings.debug_profile_start, secs = s_settings.debug_profile_seconds;
+  for (int i = 0; i < start_s * 10 && !s_profile_stop; i++) svcSleepThread(100000000LL);
+  if (s_profile_stop) return;
+  const size_t max = (size_t)secs * 2000;
+  const int kDepth = 8;
+  u64 * samples = (u64 *)calloc(max * kDepth, sizeof(u64));
+  if (!samples) return;
+  size_t n = 0;
+  printf("profiler: sampling %d s\n", secs);
+  const u64 t_end = armGetSystemTick() + armNsToTicks((u64)secs * 1000000000ULL);
+  while (n < max && !s_profile_stop && armGetSystemTick() < t_end) {
+    ThreadContext ctx;
+    if (R_SUCCEEDED(svcSetThreadActivity(s_main_thread, ThreadActivity_Paused))) {
+      if (R_SUCCEEDED(svcGetThreadContext3(&ctx, s_main_thread))) {
+        u64 * s = &samples[n * kDepth];
+        s[0] = ctx.pc.x;
+        s[1] = ctx.lr;
+        u64 fp = ctx.fp;
+        for (int d = 2; d < kDepth && fp && (fp & 7) == 0 && readableAddress(fp); d++) {
+          const u64 * frame = (const u64 *)fp;
+          s[d] = frame[1];
+          if (frame[0] <= fp) break;
+          fp = frame[0];
+        }
+        n++;
+      }
+      svcSetThreadActivity(s_main_thread, ThreadActivity_Runnable);
+    }
+    svcSleepThread(500000LL);
+  }
+  const std::string path = nx::dataPath("profile.bin");
+  FILE * fp = fopen(path.c_str(), "wb");
+  if (fp) {
+    const u64 base = (u64)_start;
+    const u64 depth = kDepth;
+    fwrite(&base, sizeof(base), 1, fp);
+    fwrite(&depth, sizeof(depth), 1, fp);
+    fwrite(samples, sizeof(u64) * kDepth, n, fp);
+    fclose(fp);
+  }
+  printf("profiler: wrote %zu samples to %s\n", n, path.c_str());
+  free(samples);
+}
+
 static void sampleAllThreads()
 {
   // A few samples show whether a thread is parked or looping
@@ -1056,6 +1107,14 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   s_phase = Phase::Game;
 
   u64 stats_start = armGetSystemTick();
+  Thread profiler;
+  bool profiler_started = false;
+  if (s_settings.debug_profile_seconds > 0) {
+    s_profile_stop = false;
+    // Core 1, with the renderer: core 0 is the thread being sampled, core 2 the sound CPU
+    profiler_started = R_SUCCEEDED(threadCreate(&profiler, profilerMain, NULL, NULL, 0x4000, 0x20, 1)) &&
+                       R_SUCCEEDED(threadStart(&profiler));
+  }
   int stats_frames = 0;
   SessionEnd end = SessionEnd::ExitApp;
 
@@ -1150,6 +1209,11 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   }
 
   // Saves first, so nothing is lost if teardown goes wrong
+  if (profiler_started) {
+    s_profile_stop = true;
+    threadWaitForExit(&profiler);
+    threadClose(&profiler);
+  }
   printf("Stopping game\n");
   YabMemMapFlush();
   s_phase = Phase::GameTeardown;

@@ -1009,7 +1009,10 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
   u32 instruction_counter = 0;
   u32 write_memory_counter = 0;
   u32 calsize;
-  std::unordered_map<u32, uintptr_t> addr_map;
+  // Host code address of each SH-2 instruction compiled so far in this block,
+  // by (addr - start) / 2: the block's instructions are consecutive
+  static uintptr_t addr_map[4096];
+  u32 addr_map_used = 0;
 
   startptr = ptr = page->code;
 
@@ -1059,12 +1062,17 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
 #ifdef SET_DIRTY
     if (ParentT) {
       u32 keepaddr = adress_mask(addr);
-      ParentT[keepaddr].push_back(adress_mask(start_addr));
-      ParentT[keepaddr].unique();
+      ParentT[keepaddr].add(adress_mask(start_addr));
     }
 #endif
 
-    addr_map[addr] = (uintptr_t)ptr;
+    {
+      const u32 slot = (addr - start_addr) >> 1;
+      if (slot < 4096) {
+        while (addr_map_used <= slot) addr_map[addr_map_used++] = 0;
+        addr_map[slot] = (uintptr_t)ptr;
+      }
+    }
 
     i = dsh2_instructions[op];
     if (asm_list[i].func == 0) {
@@ -1145,8 +1153,9 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
         jumppc = addr + ((signed char)(op & 0xff) << 1) + 2;
       }
 #if defined(AARCH64)
-      if ( addr_map.count(jumppc) != 0 && write_memory_counter != 0 ) {
-        jumpptr = addr_map[jumppc];
+      const u32 jslot = (jumppc - start_addr) >> 1;
+      if ( ((jumppc - start_addr) & 1) == 0 && jslot < addr_map_used && addr_map[jslot] != 0 && write_memory_counter != 0 ) {
+        jumpptr = addr_map[jslot];
         //LOG("jumpptr = %lx\n", jumpptr );
       }
 #endif      
@@ -1266,8 +1275,7 @@ int CompileBlocks::EmmitCode(Block *page, addrs * ParentT )
 #ifdef SET_DIRTY
       if (ParentT) {
         u32 keepaddr = adress_mask(addr);
-        ParentT[keepaddr].push_back(adress_mask(start_addr));
-        ParentT[keepaddr].unique();
+        ParentT[keepaddr].add(adress_mask(start_addr));
       }
 #endif
       addr += 2;

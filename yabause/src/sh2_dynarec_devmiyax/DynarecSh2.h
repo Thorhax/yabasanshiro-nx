@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <sys/types.h>
 #include <stdint.h>
@@ -97,7 +98,42 @@ using std::list;
 using std::map;
 using std::string;
 
-typedef list<u32> addrs;
+// The blocks that contain one SH-2 code address (block start addresses, masked).
+// Nearly always one or two: kept inline, so compiling a block doesn't allocate
+// per instruction (std::list did, and in games that rewrite their code all the
+// time, such as Burning Rangers, malloc/free were a fifth of the frame).
+struct addrs
+{
+  u32 inl[3];
+  u32 count = 0;
+  std::vector<u32> * more = nullptr;   // entries past the third
+
+  u32 size() const { return count; }
+  u32 at(u32 i) const { return i < 3 ? inl[i] : (*more)[i - 3]; }
+  bool contains(u32 v) const {
+    for (u32 i = 0; i < count; i++) if (at(i) == v) return true;
+    return false;
+  }
+  void add(u32 v) {
+    if (contains(v)) return;
+    if (count < 3) { inl[count++] = v; return; }
+    if (!more) more = new std::vector<u32>();
+    more->push_back(v);
+    count++;
+  }
+  void remove(u32 v) {
+    for (u32 i = 0; i < count; i++) {
+      if (at(i) != v) continue;
+      // move the last entry into the hole
+      const u32 last = at(count - 1);
+      if (i < 3) inl[i] = last; else (*more)[i - 3] = last;
+      if (count > 3) more->pop_back();
+      count--;
+      return;
+    }
+  }
+  void clear() { count = 0; if (more) more->clear(); }
+};
 
 struct CompileStaticsNode
 {
@@ -283,21 +319,22 @@ public:
     addr = adress_mask(addr);
     if (LookupParentTable[addr].size() == 0)
       return;
-    for (auto it = LookupParentTable[addr].begin(); it != LookupParentTable[addr].end(); it++)
+    for (u32 k = 0; k < LookupParentTable[addr].size(); k++)
     {
-      if (LookupTable[*it] != NULL)
+      const u32 parent = LookupParentTable[addr].at(k);
+      if (LookupTable[parent] != NULL)
       {
-        for (u32 i = adress_mask(LookupTable[*it]->b_addr); i <= adress_mask(LookupTable[*it]->e_addr); i++)
+        for (u32 i = adress_mask(LookupTable[parent]->b_addr); i <= adress_mask(LookupTable[parent]->e_addr); i++)
         {
           if (i != addr)
           {
-            LookupParentTable[i].remove(*it);
+            LookupParentTable[i].remove(parent);
           }
         }
-        LOG("%d %08X is removed", LookupTable[*it]->id, (*it) << 1);
+        LOG("%d %08X is removed", LookupTable[parent]->id, parent << 1);
         remove_count_++;
-        self_modify_block[(((*it) << 1) | 0x06000000)] = LookupTable[*it]->id;
-        LookupTable[*it] = NULL;
+        self_modify_block[((parent << 1) | 0x06000000)] = LookupTable[parent]->id;
+        LookupTable[parent] = NULL;
       }
     }
     LookupParentTable[addr].clear();

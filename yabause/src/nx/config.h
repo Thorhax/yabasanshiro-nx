@@ -84,7 +84,9 @@ struct Settings {
   int scsp_sync_per_frame = 1;
   int audio_dump_start = 0;       // debug: audio.dump_start / audio.dump_seconds
   int audio_dump_seconds = 0;
-  int debug_load_state = 0;       // debug: load this state slot 3 s after boot (testing)
+  int debug_load_state = 0;
+  int debug_profile_start = 0;     // debug: sample the emulation thread's PC from this many s after boot
+  int debug_profile_seconds = 0;   //   for this long, into profile.bin       // debug: load this state slot 3 s after boot (testing)
   int scsp_main_mode = 0;         // 0 .. sound CPU locked to emulated time, 1 .. real time
   std::string bios = "auto";      // auto (by disc region), jp, us or hle (emulated BIOS)
 };

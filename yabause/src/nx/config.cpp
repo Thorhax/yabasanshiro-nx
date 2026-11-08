@@ -302,6 +302,7 @@ Settings loadSettings(const std::vector<std::string> & game_inis)
   s.debug_load_state = ini.getInt("debug.load_state", s.debug_load_state);
   s.debug_profile_start = ini.getInt("debug.profile_start", s.debug_profile_start);
   s.debug_profile_seconds = ini.getInt("debug.profile_seconds", s.debug_profile_seconds);
+  s.debug_profile_thread = lower(trim(ini.get("debug.profile_thread", s.debug_profile_thread)));
   return s;
 }
 

@@ -505,12 +505,15 @@ static void profilerMain(void * arg)
   u64 * samples = (u64 *)calloc(max * kDepth, sizeof(u64));
   if (!samples) return;
   size_t n = 0;
-  printf("profiler: sampling %d s\n", secs);
+  Handle target = s_main_thread;
+  if (s_settings.debug_profile_thread == "vdp") target = YabThreadGetNxHandle(YAB_THREAD_VDP);
+  else if (s_settings.debug_profile_thread == "scsp") target = YabThreadGetNxHandle(YAB_THREAD_SCSP);
+  printf("profiler: sampling %s for %d s\n", s_settings.debug_profile_thread.c_str(), secs);
   const u64 t_end = armGetSystemTick() + armNsToTicks((u64)secs * 1000000000ULL);
   while (n < max && !s_profile_stop && armGetSystemTick() < t_end) {
     ThreadContext ctx;
-    if (R_SUCCEEDED(svcSetThreadActivity(s_main_thread, ThreadActivity_Paused))) {
-      if (R_SUCCEEDED(svcGetThreadContext3(&ctx, s_main_thread))) {
+    if (R_SUCCEEDED(svcSetThreadActivity(target, ThreadActivity_Paused))) {
+      if (R_SUCCEEDED(svcGetThreadContext3(&ctx, target))) {
         u64 * s = &samples[n * kDepth];
         s[0] = ctx.pc.x;
         s[1] = ctx.lr;
@@ -523,7 +526,7 @@ static void profilerMain(void * arg)
         }
         n++;
       }
-      svcSetThreadActivity(s_main_thread, ThreadActivity_Runnable);
+      svcSetThreadActivity(target, ThreadActivity_Runnable);
     }
     svcSleepThread(500000LL);
   }
@@ -1341,6 +1344,21 @@ int main(int argc, char** argv)
       if (!fileExists(request->path)) {
         startup_message = "The game file could not be found: " + request->path;
         continue;
+      }
+      // Start the game in a fresh copy of the app, the way a HOME Menu shortcut does. In
+      // this process the launcher's SDL window has used the display window, and after it
+      // every frame waited for a display buffer (the composite took 9-13 ms instead of 1,
+      // holding the SH-2s at VBlank-OUT): games ran display-paced, with no headroom.
+      if (envHasNextLoad()) {
+        std::string arguments = "\"" + self_path + "\" --game \"" + request->path + "\"";
+        if (!request->library_id.empty())
+          arguments += " --library-id \"" + request->library_id + "\"";
+        if (!request->game_config_path.empty())
+          arguments += " --game-config \"" + request->game_config_path + "\"";
+        const Result rc = envSetNextLoad(self_path.c_str(), arguments.c_str());
+        printf("Starting the game in a fresh process: 0x%x (%s)\n", rc, arguments.c_str());
+        if (R_SUCCEEDED(rc))
+          break;
       }
       game = request->path;
       // Where the launcher keeps this game's settings (see Launcher::GetGameSetting): the

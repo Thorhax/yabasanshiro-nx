@@ -43,6 +43,7 @@ public:
   bool getBool(const std::string & key, bool def) const;
 
   const std::map<std::string, std::string> & values() const { return values_; }
+  void set(const std::string & key, const std::string & value) { values_[key] = value; }
 
 private:
   std::map<std::string, std::string> values_;
@@ -54,6 +55,9 @@ class LayeredIni {
 public:
   // A missing file just contributes nothing.
   void load(const std::string & global_path, const std::vector<std::string> & game_paths);
+  // Defaults the port ships for particular games: over settings.ini, under the
+  // game's own files
+  void setBuiltin(const IniFile & builtin) { builtin_ = builtin; }
 
   bool globalLoaded() const { return global_loaded_; }
   std::string get(const std::string & key, const std::string & def) const;
@@ -64,6 +68,7 @@ private:
   const IniFile * find(const std::string & key) const;
 
   IniFile global_;
+  IniFile builtin_;
   std::vector<IniFile> games_;
   bool global_loaded_ = false;
 };

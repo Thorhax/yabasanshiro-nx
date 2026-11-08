@@ -114,6 +114,7 @@ const IniFile * LayeredIni::find(const std::string & key) const
 {
   for (auto it = games_.rbegin(); it != games_.rend(); ++it)
     if (it->has(key)) return &*it;
+  if (builtin_.has(key)) return &builtin_;
   return &global_;
 }
 
@@ -236,11 +237,39 @@ static const char * kDefaultSettings =
   "# Turning this off is slightly faster but layers can flash black\n"
   "sync_render = on\n";
 
+// Settings particular games need, by product number (the GameSettings/<ID>.ini
+// name). The player's own per-game settings still win.
+struct BuiltinSetting { const char * game; const char * key; const char * value; const char * why; };
+static const BuiltinSetting kBuiltinSettings[] = {
+  // The dynarec hangs when the intro ends (the master SH-2 queues a slave
+  // command with a null handler); the interpreter is exact and still full speed
+  { "MK-81073", "emulation.sh2_core", "interpreter", "Fighters Megamix hangs after its intro with the dynarec" },
+  { "GS-9126",  "emulation.sh2_core", "interpreter", "Fighters Megamix hangs after its intro with the dynarec" },
+};
+
+static IniFile builtinGameSettings(const std::vector<std::string> & game_inis)
+{
+  IniFile builtin;
+  for (const std::string & path : game_inis) {
+    std::string name = path.substr(path.find_last_of('/') + 1);
+    if (name.size() > 4 && name.compare(name.size() - 4, 4, ".ini") == 0)
+      name.resize(name.size() - 4);
+    for (const BuiltinSetting & b : kBuiltinSettings) {
+      if (name.compare(0, strlen(b.game), b.game) == 0) {
+        builtin.set(b.key, b.value);
+        printf("Built-in setting for %s: %s = %s (%s)\n", b.game, b.key, b.value, b.why);
+      }
+    }
+  }
+  return builtin;
+}
+
 Settings loadSettings(const std::vector<std::string> & game_inis)
 {
   std::string path = dataPath("settings.ini");
   LayeredIni ini;
   ini.load(path, game_inis);
+  ini.setBuiltin(builtinGameSettings(game_inis));
   if (!ini.globalLoaded()) {
     FILE * fp = fopen(path.c_str(), "w");
     if (fp) {

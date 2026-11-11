@@ -63,7 +63,7 @@ std::atomic<u32> s_periods{0};
 std::atomic<u64> s_ratio_sum_ppm{0};
 
 // Debug capture
-int s_dump_start = 0, s_dump_secs = 0;
+volatile int s_dump_start = 0; int s_dump_secs = 0;   // start < 0: armed, waits for SndNxTriggerDump
 s16 * s_dump_in = nullptr, * s_dump_out = nullptr;
 u32 s_dump_in_len = 0, s_dump_out_len = 0;   // frames wanted
 u32 s_dump_in_pos = 0, s_dump_out_pos = 0;   // frames captured
@@ -288,7 +288,7 @@ void produce(s16 * out)
 
   if (s_dump_out) {
     for (u32 k = 0; k < kPeriod; k++, s_out_total++) {
-      if (s_out_total < (u64)s_dump_start * s_out_rate) continue;
+      if (s_dump_start < 0 || s_out_total < (u64)s_dump_start * s_out_rate) continue;
       if (s_dump_out_pos >= s_dump_out_len) break;
       s_dump_out[s_dump_out_pos * 2] = out[k * 2];
       s_dump_out[s_dump_out_pos * 2 + 1] = out[k * 2 + 1];
@@ -421,7 +421,7 @@ void UpdateAudio(u32 * left, u32 * right, u32 num)
 
   if (s_dump_in) {
     for (u32 k = 0; k < num; k++, s_in_total++) {
-      if (s_in_total < (u64)s_dump_start * kInRate) continue;
+      if (s_dump_start < 0 || s_in_total < (u64)s_dump_start * kInRate) continue;
       if (s_dump_in_pos >= s_dump_in_len) break;
       s_dump_in[s_dump_in_pos * 2] = clamp16(l[k]);
       s_dump_in[s_dump_in_pos * 2 + 1] = clamp16(r[k]);
@@ -512,9 +512,14 @@ void SndNxTakeStats(SndNxStats * st)
   st->ratio = periods ? (float)(rsum / (double)periods / 1000000.0) : 1.0f;
 }
 
+void SndNxTriggerDump(void)
+{
+  if (s_dump_start < 0) s_dump_start = (int)(s_in_total / kInRate) + 1;
+}
+
 void SndNxSetDump(int start, int seconds)
 {
-  s_dump_start = start < 0 ? 0 : start;
+  s_dump_start = start < 0 ? -1 : start;
   s_dump_secs = seconds < 0 ? 0 : seconds;
 }
 

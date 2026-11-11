@@ -300,6 +300,9 @@ Settings loadSettings(const std::vector<std::string> & game_inis)
   s.audio_dump_start = ini.getInt("audio.dump_start", s.audio_dump_start);
   s.audio_dump_seconds = ini.getInt("audio.dump_seconds", s.audio_dump_seconds);
   s.debug_load_state = ini.getInt("debug.load_state", s.debug_load_state);
+  s.debug_scsp_trace = ini.getBool("debug.scsp_trace", s.debug_scsp_trace);
+  s.debug_pc_profile = ini.getBool("debug.pc_profile", s.debug_pc_profile);
+  s.debug_dump_wram_frame = ini.getInt("debug.dump_wram_frame", s.debug_dump_wram_frame);
   s.debug_profile_start = ini.getInt("debug.profile_start", s.debug_profile_start);
   s.debug_profile_seconds = ini.getInt("debug.profile_seconds", s.debug_profile_seconds);
   s.debug_profile_thread = lower(trim(ini.get("debug.profile_thread", s.debug_profile_thread)));

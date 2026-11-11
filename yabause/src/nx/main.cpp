@@ -50,6 +50,11 @@ extern "C" {
 #include "sndsdl.h"
 #include "sndnx.h"
 extern "C" void NxSoundCpuStatus(u32 * pc, int * running, u32 * sr);
+extern "C" int g_scsp_trace;
+extern "C" int g_nx_pcprof;
+extern "C" u64 g_nx_memcyc[256], g_nx_memacc[256];
+extern "C" u32 g_nx_pcprof_pc[2][1024], g_nx_pcprof_n[2][1024];
+extern "C" volatile u32 g_scsp_tr_ca_reads[2], g_scsp_tr_mslc_writes[2], g_scsp_tr_sndram_w;
 #include "osdcore.h"
 #include "ygl.h"
 #include "yui.h"
@@ -1157,6 +1162,23 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     s_progress++;
 
     // Test runs: jump straight to a saved spot
+    if (s_settings.debug_dump_wram_frame > 0 && s_frames_done == (u64)s_settings.debug_dump_wram_frame) {
+      // Debug: work RAM snapshot for offline disassembly (T2 memory is byte-swapped per word on little endian)
+      extern u8 * HighWram; extern u8 * LowWram;
+      FILE * f = fopen(nx::dataPath("hwram.bin").c_str(), "wb");
+      if (f) { for (u32 a = 0; a < 0x100000; a += 2) { u8 b[2] = { HighWram[a ^ 1], HighWram[a] }; fwrite(b, 1, 2, f); } fclose(f); }
+      f = fopen(nx::dataPath("lwram.bin").c_str(), "wb");
+      if (f) { for (u32 a = 0; a < 0x100000; a += 2) { u8 b[2] = { LowWram[a ^ 1], LowWram[a] }; fwrite(b, 1, 2, f); } fclose(f); }
+      printf("debug: work RAM dumped at frame %d\n", s_settings.debug_dump_wram_frame);
+    }
+    if (s_settings.audio_dump_seconds > 0 && s_settings.audio_dump_start < 0 && (s_frames_done % 30) == 0) {
+      const std::string trig = nx::dataPath("dump.now");
+      if (access(trig.c_str(), F_OK) == 0) { remove(trig.c_str()); SndNxTriggerDump(); printf("audio dump: triggered\n"); }
+    }
+    if (s_frames_done == 1) {
+      g_scsp_trace = s_settings.debug_scsp_trace ? 1 : 0;
+      g_nx_pcprof = s_settings.debug_pc_profile ? 1 : 0;
+    }
     if (s_settings.debug_load_state > 0 && s_frames_done == 180) {
       const int rc = YabLoadStateSlot(stateDirectory().c_str(), (u8)s_settings.debug_load_state);
       printf("debug.load_state: slot %d: %d\n", s_settings.debug_load_state, rc);
@@ -1211,6 +1233,36 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
                running ? "running" : "stopped", (unsigned)pc, (unsigned)sr,
                (unsigned)mr.PC, yabsys.IsSSH2Running ? "on" : "off", (unsigned)sr2.PC, (unsigned)Cs2Area->status, (unsigned)Cs2Area->FAD,
                (unsigned)Cs2Area->reg.HIRQ, (unsigned)Cs2Area->playFAD, (unsigned)Cs2Area->playendFAD);
+      }
+      if (g_nx_pcprof) {
+        for (int cpu = 0; cpu < 2; cpu++) {
+          u32 total = 0; for (int i = 0; i < 1024; i++) total += g_nx_pcprof_n[cpu][i];
+          printf("  pcprof %s (%u):", cpu ? "ssh2" : "msh2", (unsigned)total);
+          for (int t = 0; t < 10 && total; t++) {
+            int best = -1; for (int i = 0; i < 1024; i++) if (g_nx_pcprof_n[cpu][i] && (best < 0 || g_nx_pcprof_n[cpu][i] > g_nx_pcprof_n[cpu][best])) best = i;
+            if (best < 0) break;
+            printf(" %08X %u%%", (unsigned)g_nx_pcprof_pc[cpu][best], (unsigned)(g_nx_pcprof_n[cpu][best] * 100 / total));
+            g_nx_pcprof_n[cpu][best] = 0;
+          }
+          printf("\n");
+          memset(g_nx_pcprof_n[cpu], 0, sizeof(g_nx_pcprof_n[cpu]));
+        }
+        u64 tot = 0; for (int i = 0; i < 256; i++) tot += g_nx_memcyc[i];
+        printf("  memcyc total %llu (%.1f%% of 2 CPUs):", (unsigned long long)tot, tot * 100.0 / (2 * 28636363.0 * 5));
+        for (int t = 0; t < 6; t++) {
+          int best = -1; for (int i = 0; i < 256; i++) if (g_nx_memacc[i] && (best < 0 || g_nx_memcyc[i] > g_nx_memcyc[best])) best = i;
+          if (best < 0) break;
+          printf(" %02Xxxxxxx %llu cyc/%llu acc", best, (unsigned long long)g_nx_memcyc[best], (unsigned long long)g_nx_memacc[best]);
+          g_nx_memacc[best] = 0;
+        }
+        printf("\n");
+        memset(g_nx_memcyc, 0, sizeof(g_nx_memcyc)); memset(g_nx_memacc, 0, sizeof(g_nx_memacc));
+      }
+      if (g_scsp_trace) {
+        printf("  scsp trace: CA reads sh2 %u 68k %u, MSLC writes sh2 %u 68k %u, sh2 sound ram writes %u bytes\n",
+               (unsigned)g_scsp_tr_ca_reads[0], (unsigned)g_scsp_tr_ca_reads[1], (unsigned)g_scsp_tr_mslc_writes[0],
+               (unsigned)g_scsp_tr_mslc_writes[1], (unsigned)g_scsp_tr_sndram_w);
+        g_scsp_tr_ca_reads[0] = g_scsp_tr_ca_reads[1] = g_scsp_tr_mslc_writes[0] = g_scsp_tr_mslc_writes[1] = g_scsp_tr_sndram_w = 0;
       }
       nx::overlay::setFps((float)fps);
       stats_frames = 0;

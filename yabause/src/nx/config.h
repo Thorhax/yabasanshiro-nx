@@ -90,6 +90,9 @@ struct Settings {
   int audio_dump_start = 0;       // debug: audio.dump_start / audio.dump_seconds
   int audio_dump_seconds = 0;
   int debug_load_state = 0;
+  bool debug_scsp_trace = false;
+  bool debug_pc_profile = false;
+  int debug_dump_wram_frame = 0;   // debug: write hwram.bin/lwram.bin at this frame   // debug: log the most frequent emulated SH-2 PCs   // debug: log sound streams (key on/off, call-address reads)
   int debug_profile_start = 0;     // debug: sample the emulation thread's PC from this many s after boot
   int debug_profile_seconds = 0;   //   for this long, into profile.bin
   std::string debug_profile_thread = "main";  // main | vdp | scsp       // debug: load this state slot 3 s after boot (testing)

@@ -43,6 +43,8 @@ void SndNxTakeStats(SndNxStats * stats);
 // sdmc:/switch/yabasanshiro/audio_out.wav and audio_in.wav. seconds 0 = off.
 // Call before init.
 void SndNxSetDump(int start, int seconds);
+// Debug: with dump_start = -1 the capture waits for this (main.cpp: when sdmc:/switch/yabasanshiro/dump.now appears)
+void SndNxTriggerDump(void);
 
 #ifdef __cplusplus
 }

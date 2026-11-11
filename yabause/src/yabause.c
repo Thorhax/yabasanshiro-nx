@@ -658,6 +658,26 @@ void SyncCPUtoSCSP();
 #if defined(NX) && defined(ASYNC_SCSP)
 static void NxWaitForSoundCpu(void);
 #endif
+#if defined(NX)
+// Debug ([debug] pc_profile = on): which emulated SH-2 PCs the line ends land on
+int g_nx_pcprof = 0;
+#define NX_PCPROF_SIZE 1024
+u32 g_nx_pcprof_pc[2][NX_PCPROF_SIZE];
+u32 g_nx_pcprof_n[2][NX_PCPROF_SIZE];
+static void NxPcAdd(int cpu, u32 pc) {
+  u32 h = (pc >> 1) * 2654435761u;
+  for (int k = 0; k < 16; k++) {
+    u32 i = (h + k) & (NX_PCPROF_SIZE - 1);
+    if (g_nx_pcprof_n[cpu][i] == 0) { g_nx_pcprof_pc[cpu][i] = pc; g_nx_pcprof_n[cpu][i] = 1; return; }
+    if (g_nx_pcprof_pc[cpu][i] == pc) { g_nx_pcprof_n[cpu][i]++; return; }
+  }
+}
+static void NxPcSample(void) {
+  sh2regs_struct r;
+  SH2GetRegisters(MSH2, &r); NxPcAdd(0, r.PC);
+  if (yabsys.IsSSH2Running) { SH2GetRegisters(SSH2, &r); NxPcAdd(1, r.PC); }
+}
+#endif
 u64 getM68KCounter();
 u64 g_m68K_dec_cycle = 0;
 
@@ -796,6 +816,9 @@ int YabauseEmulate(void) {
          ScspExec();
 #if defined(NX) && defined(ASYNC_SCSP)
          NxWaitForSoundCpu();
+#endif
+#if defined(NX)
+         if (g_nx_pcprof) NxPcSample();
 #endif
          PROFILE_STOP("SCSP");
          yabsys.DecilineCount = 0;

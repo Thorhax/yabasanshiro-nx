@@ -926,8 +926,25 @@ void scsp_debug_get_envelope(int chan, int * env, int * state)
 
 
 
+#if defined(NX)
+// Debug trace ([debug] scsp_trace = on): stream key on/off and call-address reads
+extern "C" int g_scsp_trace;
+int g_scsp_trace = 0;
+static __thread int t_is_scsp_thread = 0;
+static volatile u64 g_scsp_tr_samples = 0;
+extern "C" volatile u32 g_scsp_tr_ca_reads[2], g_scsp_tr_mslc_writes[2], g_scsp_tr_sndram_w;
+volatile u32 g_scsp_tr_ca_reads[2], g_scsp_tr_mslc_writes[2], g_scsp_tr_sndram_w;
+#define NX_TRACE_SLOT(what, slot) do { if (g_scsp_trace && (slot)->regs.lea >= 0x400) \
+  printf("%9.3f scsp %s slot %2d %s sa %05X lsa %04X lea %04X lp %d 8b %d oct %d fns %03X off %04X env %d att %03X tl %02X\n", g_scsp_tr_samples / 44100.0, what, (slot)->state.num, \
+   t_is_scsp_thread ? "68k" : "sh2", (unsigned)(slot)->regs.sa, (unsigned)(slot)->regs.lsa, (unsigned)(slot)->regs.lea, (int)(slot)->regs.lpctl, (int)(slot)->regs.pcm8b, \
+   (int)(slot)->regs.oct, (unsigned)(slot)->regs.fns, (unsigned)(slot)->state.sample_offset, (int)(slot)->state.envelope, (unsigned)(slot)->state.attenuation, (unsigned)(slot)->regs.tl); } while (0)
+#else
+#define NX_TRACE_SLOT(what, slot) do {} while (0)
+#endif
+
 void keyon(struct Slot * slot) 
 {
+   NX_TRACE_SLOT(slot->state.envelope == RELEASE ? "keyon " : "keyon-ignored", slot);
    if (slot->state.envelope == RELEASE )
    {
      slot->state.envelope = ATTACK;
@@ -995,6 +1012,7 @@ void keyon(struct Slot * slot)
 
 void keyoff(struct Slot * slot)
 {
+   if (slot->state.envelope != RELEASE) NX_TRACE_SLOT("keyoff", slot);
    change_envelope_state(slot, RELEASE);
 }
 
@@ -2758,6 +2776,9 @@ scsp_set_b (u32 a, u8 d)
 
     case 0x08: // MSLC
       scsp.mslc = (d >> 3) & 0x1F;
+#if defined(NX)
+      g_scsp_tr_mslc_writes[t_is_scsp_thread]++;
+#endif
       scsp_update_monitor ();
       return;
 
@@ -2945,6 +2966,9 @@ scsp_set_w (u32 a, u16 d)
 
     case 0x08: // MSLC
       scsp.mslc = (d >> 11) & 0x1F;
+#if defined(NX)
+      g_scsp_tr_mslc_writes[t_is_scsp_thread]++;
+#endif
       scsp_update_monitor();
       return;
 
@@ -3062,6 +3086,9 @@ scsp_get_b (u32 a)
       return scsp_midi_out_read();
 
     case 0x08: // CA(highest 3 bits)
+#if defined(NX)
+      g_scsp_tr_ca_reads[t_is_scsp_thread]++;
+#endif
       return (scsp.ca >> 8);
 
     case 0x09: // CA(lowest bit)/SGC/EG
@@ -3121,6 +3148,9 @@ scsp_get_w (u32 a)
       return scsp_midi_out_read();
 
     case 0x08: // CA/SGC/EG
+#if defined(NX)
+      g_scsp_tr_ca_reads[t_is_scsp_thread]++;
+#endif
       return (scsp.ca & 0x780) | (scsp.sgc << 5) | scsp.eg;
      
     case 0x18: // TACTL
@@ -5018,6 +5048,9 @@ SoundRamWriteWord (u32 addr, u16 val)
   else if (addr > 0x7FFFF)
     return;
   //LOG("SoundRamWriteWord %08X:%04X", addr, val);
+#if defined(NX)
+  g_scsp_tr_sndram_w += 2;
+#endif
   T2WriteWord (SoundRam, addr, val);
   M68K->WriteNotify (addr, 2);
   //SyncSh2And68k();
@@ -5065,6 +5098,9 @@ SoundRamWriteLong (u32 addr, u32 val)
     return;
 
   //LOG("SoundRamWriteLong %08X:%08X", addr, val);
+#if defined(NX)
+  g_scsp_tr_sndram_w += 4;
+#endif
   T2WriteLong (SoundRam, addr, val);
   M68K->WriteNotify (addr, 4);
   //SyncSh2And68k();
@@ -5334,6 +5370,9 @@ void new_scsp_run_sample()
    }
 
    scsp_update_monitor();
+#if defined(NX)
+   g_scsp_tr_samples++;
+#endif
    new_scsp_outbuf_pos++;
 }
 
@@ -5554,6 +5593,9 @@ extern "C" void * ScspAsynMainCpuTime( void * p ){
   int frame_div = g_scsp_sync_count_per_frame;
   int framecnt = 188160 / frame_div; // 11289600/60
   int hzcheck = 0;
+#if defined(NX)
+  t_is_scsp_thread = 1;
+#endif
 
 #if defined(ARCH_IS_LINUX)
   struct timespec tm;

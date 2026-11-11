@@ -872,6 +872,18 @@ u32 getMemClock(u32 addr) {
   return 0;
 }
 
+// SH-2 writes to the B-bus go through the SCU's write buffer:
+// the CPU doesn't wait for the slow bus the way a read does (Ymir measures 2 cycles for these writes,
+// against 20-40 for reads). Charging the read cost made CPU-heavy movie players that write every
+// decoded pixel to VRAM run below full speed (Policenauts: the movie and its streamed audio fell
+// behind, so the sound looped stale buffer data and subtitles were cut short).
+u32 getMemWriteClock(u32 addr) {
+  const u32 a = addr & 0xDFFFFFFF;
+  // VDP1 VRAM/framebuffer and VDP2 VRAM only: register and sound RAM writes keep the old cost, some
+  // timing-sensitive games (Fighters Megamix) stop booting when those get faster
+  if ((a >= 0x05C00000 && a < 0x05D00000) || (a >= 0x05E00000 && a < 0x05E80000)) return 2;
+  return getMemClock(addr);
+}
 
 #endif
 
@@ -1147,7 +1159,7 @@ void FASTCALL MappedMemoryWriteByte(u32 addr, u8 val, u32 * cycle)
   //}
 
   if (cycle != NULL) {
-    *cycle = getMemClock(addr);
+    *cycle = getMemWriteClock(addr);
   }
 
   switch (addr >> 29)
@@ -1211,7 +1223,7 @@ void FASTCALL MappedMemoryWriteWord(u32 addr, u16 val, u32 * cycle )
 #endif
 {
   if (cycle != NULL) {
-    *cycle = getMemClock(addr);
+    *cycle = getMemWriteClock(addr);
   }
 
    switch (addr >> 29)
@@ -1288,7 +1300,7 @@ void FASTCALL MappedMemoryWriteLong(u32 addr, u32 val, u32 * cycle )
 #endif
 
    if (cycle != NULL) {
-     *cycle = getMemClock(addr);
+     *cycle = getMemWriteClock(addr);
    }
 
    switch (addr >> 29)

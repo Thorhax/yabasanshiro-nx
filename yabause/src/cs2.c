@@ -292,12 +292,21 @@ u16 FASTCALL Cs2ReadWord(u32 addr) {
 
 //////////////////////////////////////////////////////////////////////////////
 
+#ifdef NX
+extern int g_scsp_trace;
+extern double NxScspTraceTime(void);
+#endif
 void FASTCALL Cs2WriteWord(u32 addr, u16 val) {
   addr &= 0xFFFFF; // fix me(I should really have proper mapping)
 
   switch(addr) {
     case 0x90008:
     case 0x9000A:
+#ifdef NX
+      if (g_scsp_trace && val != 0xFFFE && (val & 0xFFFF) != 0xFFFF)
+        printf("%9.3f cdhirq clear %04X hirq %04X -> %04X st %02X fad %06X\n", NxScspTraceTime(), (u16)~val, Cs2Area->reg.HIRQ,
+               Cs2Area->reg.HIRQ & val, Cs2Area->status, (unsigned)Cs2Area->FAD);
+#endif
       Cs2Area->reg.HIRQ = Cs2Area->reg.HIRQ & val;
 				  //if (val != 0xFFFE){
 					//  CDLOG("write HIRQ %04X, %04X\n", Cs2Area->reg.HIRQ, val);
@@ -1001,6 +1010,9 @@ void Cs2Exec(u32 timing) {
 	  }
 
       // Get Drive's current status and compare with old status
+      int read_now;
+      do {
+      read_now = 0;
       switch (Cs2Area->status & 0xF) {
          case CDB_STAT_PAUSE:
          {
@@ -1114,6 +1126,11 @@ void Cs2Exec(u32 timing) {
              Cs2Area->nextStatus = 0xFF;
              Cs2SetTiming(0);
            }
+           else if ((Cs2Area->status & 0xF) == CDB_STAT_PLAY) {
+             // The seek ends on the target sector: read it now, so the drive never reports PLAY with nothing
+             // read yet. Streaming code that checks the status (GFS) expects the data to be flowing by then.
+             read_now = 1;
+           }
 			     break;
 		     }
          case CDB_STAT_SCAN:
@@ -1132,6 +1149,7 @@ void Cs2Exec(u32 timing) {
            break;
          default: break;
       }
+      } while (read_now);
 
       if (Cs2Area->_command)
          return;
@@ -1207,6 +1225,9 @@ void Cs2SetCommandTiming(u8 cmd) {
 
 void Cs2Execute(void) {
   u16 instruction = Cs2Area->reg.CR1 >> 8;
+#ifdef NX
+  u16 nx_cr[4] = { Cs2Area->reg.CR1, Cs2Area->reg.CR2, Cs2Area->reg.CR3, Cs2Area->reg.CR4 };
+#endif
 
   //Cs2Area->reg.HIRQ &= ~CDB_HIRQ_CMOK;
 
@@ -1500,6 +1521,18 @@ void Cs2Execute(void) {
       CDLOG("cs2\t: Command %02x not implemented\n", instruction);
       break;
   }
+#ifdef NX
+  static u16 nx_last51[4];
+  if (g_scsp_trace && instruction == 0x51) {
+    if (nx_last51[0] == Cs2Area->reg.CR1 && nx_last51[1] == Cs2Area->reg.CR2
+        && nx_last51[2] == Cs2Area->reg.CR3 && nx_last51[3] == Cs2Area->reg.CR4) return;
+    nx_last51[0] = Cs2Area->reg.CR1; nx_last51[1] = Cs2Area->reg.CR2; nx_last51[2] = Cs2Area->reg.CR3; nx_last51[3] = Cs2Area->reg.CR4;
+  }
+  if (g_scsp_trace && instruction != 0x00)
+    printf("%9.3f cdcmd %04X %04X %04X %04X -> %04X %04X %04X %04X hirq %04X fad %06X st %02X\n", NxScspTraceTime(),
+           nx_cr[0], nx_cr[1], nx_cr[2], nx_cr[3], Cs2Area->reg.CR1, Cs2Area->reg.CR2, Cs2Area->reg.CR3, Cs2Area->reg.CR4,
+           Cs2Area->reg.HIRQ, (unsigned)Cs2Area->FAD, Cs2Area->status);
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1781,6 +1814,8 @@ void Cs2PlayDisc(void) {
   CDLOG("[CDB] Command: Play; Start = 0x%06x, End = 0x%06x, Mode = 0x%02x", pdspos, pdepos, pdpmode);
 
   u32 current_fad = Cs2Area->FAD;
+  // The pickup stays where it is: start "no change", or play mode bit 7
+  const int keep_pickup = (pdspos == 0xFFFFFF || pdpmode == 0xFF || (pdpmode & 0x80));
   // Convert Start Position to playFAD
   if (pdspos == 0xFFFFFF || pdpmode == 0xFF) // This still isn't right
   {
@@ -1852,6 +1887,18 @@ void Cs2PlayDisc(void) {
   {
      // Default Mode
      Cs2Area->playendFAD = Cs2TrackToFAD(0xFFFF);
+  }
+
+  // A play that leaves the pickup alone while the drive is already playing or seeking only moves the end
+  // position: the drive keeps reading. GFS extends a running read this way. Restarting the seek here held
+  // back the data of every extension, so streaming code saw no data where real hardware has some (Deep
+  // Fear's ADX ambience missed its loop point and restarted every few seconds with a burst of noise).
+  if (keep_pickup && Cs2Area->playtype == CDB_PLAYTYPE_SECTOR &&
+      (Cs2Area->status == CDB_STAT_PLAY || Cs2Area->status == CDB_STAT_SEEK)) {
+    CDLOG("[CDB] play extended to %06x without seeking", Cs2Area->playendFAD);
+    doCDReport(Cs2Area->status);
+    Cs2SetIRQ(CDB_HIRQ_CMOK);
+    return;
   }
 
   // setup play mode here

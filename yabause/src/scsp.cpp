@@ -932,6 +932,7 @@ extern "C" int g_scsp_trace;
 int g_scsp_trace = 0;
 static __thread int t_is_scsp_thread = 0;
 static volatile u64 g_scsp_tr_samples = 0;
+extern "C" double NxScspTraceTime(void) { return g_scsp_tr_samples / 44100.0; }
 extern "C" volatile u32 g_scsp_tr_ca_reads[2], g_scsp_tr_mslc_writes[2], g_scsp_tr_sndram_w;
 volatile u32 g_scsp_tr_ca_reads[2], g_scsp_tr_mslc_writes[2], g_scsp_tr_sndram_w;
 #define NX_TRACE_SLOT(what, slot) do { if (g_scsp_trace && (slot)->regs.lea >= 0x400) \

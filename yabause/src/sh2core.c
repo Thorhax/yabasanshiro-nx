@@ -194,6 +194,10 @@ void SH2Reset(SH2_struct *context)
    // Internal variables
    context->delay = 0x00000000;
    context->cycles = 0;
+   // Clear the overshoot too: SH2InterpreterExec computes its target as
+   // cycles + n - pre_cycle, which goes negative (and runs ~4G cycles) when a
+   // reset mid-frame leaves pre_cycle larger than the next slice
+   context->pre_cycle = 0;
    context->isIdle = 0;
 
    context->frc.leftover = 0;

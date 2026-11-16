@@ -1043,6 +1043,7 @@ void YabauseStartSlave(void) {
       MappedMemoryWriteByte(0xfffffe92, 0x01, NULL); // CCR
 
       SSH2->cycles = 0;
+      SSH2->pre_cycle = 0;
       SH2Core->AddCycle(SSH2,2000);
 
       CurrentSH2 = MSH2;

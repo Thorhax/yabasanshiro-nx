@@ -101,8 +101,10 @@ freeze the console's graphics driver (Bulk Slash stage 1, Sonic R when loading a
 CPU version keeps those games at full speed. Turn it on only if a game is too slow without it.
 
 Some games come with settings of their own that the app applies automatically (a game's own
-settings page still overrides them). At the moment: **Fighters Megamix** runs on the SH-2
-interpreter, because with the dynamic recompiler its CD loading after the intro never finishes.
+settings page still overrides them). At the moment: **Fighters Megamix** runs on the dynamic
+recompiler with the emulator's built-in BIOS, because with a real BIOS loaded it can still freeze at
+boot on that CPU core. Known issue: the fighters' heads and torsos show misplaced polygons and wrong
+colours in some frames (both CPU cores, all polygon modes); not fixed yet.
 
 Save states made before 1.3.0 didn't store the sound CPU's registers. They still load, but the
 sound CPU restarts, so a game may stay silent until it plays its next sound or music; make a new

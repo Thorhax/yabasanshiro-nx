@@ -813,6 +813,57 @@ static std::string stateDirectory()
   return nx::dataPath("states");
 }
 
+// Fighters Megamix (MK-81073 / GS-9126) game fix.
+// The master SH-2 feeds the slave through SGL's command queue. SGL keeps the
+// buffer address in a variable (0x060F8270) and always adds the cache-through
+// bit when it sets the queue's read and write pointers (0x260F8270). The game's
+// own screen-mode change doesn't: it sets both pointers to the plain address,
+// restarts the slave, wakes it to run the queue init (which uses the
+// cache-through form), calls the BIOS six times and then has SGL re-initialise
+// the queue. Until the re-init, the slave sees two different pointers and keeps
+// re-running the stale first entry, and the master's new entry can catch it
+// half-read: it runs the argument as a command, calls address 0 and the master
+// waits for it forever (black screen after the intro). With the emulator's own
+// BIOS those six calls are instant and the re-init usually comes first; with a
+// real BIOS the slave usually loses. Storing the cache-through form in SGL's
+// variable makes the game write the same value SGL does: the slave stays idle
+// until the re-init has posted a complete entry. Every SGL user of the variable
+// already adds that bit.
+static u32 s_fmm_base_var = 0; // address of SGL's queue buffer variable, 0 = not found yet
+static int s_fmm_fix_scan = 0;
+static void fmmQueueBaseFix()
+{
+  if (!s_fmm_base_var) {
+    if (++s_fmm_fix_scan < 30) return;
+    s_fmm_fix_scan = 0;
+    // SGL slave queue init: mov.l @(0x13,pc),r0 (the variable's address); mov.l @(0x12,pc),r1;
+    // mov.l @(0x13,pc),r2 (0x20000000); mov.l @r0,r0; ldc r1,gbr; or r2,r0; mov.l r0,@(68,gbr)
+    static const u16 kInit[] = { 0xD013, 0xD112, 0xD213, 0x6002, 0x411E, 0x202B, 0xC211 };
+    const u32 n = sizeof(kInit) / sizeof(kInit[0]);
+    for (u32 o = 0; o + n * 2 <= 0x100000; o += 2) {
+      u32 i = 0;
+      while (i < n && T2ReadWord(HighWram, o + i * 2) == kInit[i]) i++;
+      if (i < n) continue;
+      const u32 lit = ((o & ~3u) + 4 + 0x13 * 4) & 0xFFFFF;
+      const u32 var = T2ReadLong(HighWram, lit);
+      if ((var & 0xFFF00000) != 0x06000000) return;
+      s_fmm_base_var = var;
+      printf("Game fix: Fighters Megamix queue base variable at %08X\n", (unsigned)var);
+      break;
+    }
+    if (!s_fmm_base_var) return;
+  }
+  const u32 base = T2ReadLong(HighWram, s_fmm_base_var & 0xFFFFF);
+  if ((base & 0xFFF00000) != 0x06000000) return; // not set yet, or already the cache-through form
+  // Write through each CPU's cache so a cached copy of the variable is updated too
+  SH2_struct * const current = CurrentSH2;
+  CurrentSH2 = MSH2;
+  MappedMemoryWriteLong(s_fmm_base_var, base | 0x20000000, NULL);
+  CurrentSH2 = SSH2;
+  MappedMemoryWriteLong(s_fmm_base_var, base | 0x20000000, NULL);
+  CurrentSH2 = current;
+}
+
 // Hands the cheat list to the quick menu
 static void publishCheats()
 {
@@ -1110,6 +1161,9 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
   DolphinSwitch::RuntimeOverlay::SetAspect(kAspects[aspectIndex(s_settings.aspect_mode)].name);
   nx::cheats::load(game, game_code);
   publishCheats();
+  const bool fmm_fix = game_code && (strncmp(game_code, "MK-81073", 8) == 0 || strncmp(game_code, "GS-9126", 7) == 0);
+  s_fmm_base_var = 0;
+  s_fmm_fix_scan = 0;
 
   s_frames_done = 0;
   s_phase = Phase::Game;
@@ -1158,6 +1212,7 @@ static SessionEnd runGame(const std::string & game, const std::vector<std::strin
     const u64 exec_start = armGetSystemTick();
     YabauseExec(); // one frame
     g_nx_prof[NX_PROF_EMU_FRAME] += armTicksToNs(armGetSystemTick() - exec_start) / 1000;
+    if (fmm_fix) fmmQueueBaseFix();
     s_frames_done++;
     s_progress++;
 

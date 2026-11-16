@@ -833,8 +833,20 @@ INLINE int getVramCycle(u32 addr) {
 const int clock_shift = 1;
 
 
+// Work RAM costs the interpreter the same as the dynarec (DynarecSh2CInterface.cpp): nothing through the
+// cacheable addresses, where real hardware nearly always hits the SH-2 cache (this build has no cache
+// emulation), and a few cycles through the cache-through mirror. Charging every access the uncached bus
+// cost ran data-heavy games at half speed on the interpreter (Fighters Megamix matches at 44%).
+static INLINE int workRamClock(u32 addr, int write, u32 * clock) {
+  if ((addr & 0xDFF00000) == 0x06000000) { *clock = (addr & 0x20000000) ? 2 : 0; return 1; }
+  if ((addr & 0xDFF00000) == 0x00200000) { *clock = (addr & 0x20000000) ? (write ? 7 : 4) : 0; return 1; }
+  return 0;
+}
+
 u32 getMemClock(u32 addr) {
-  
+  u32 wram;
+  if (workRamClock(addr, 0, &wram)) return wram;
+
   addr = addr & 0xDFFFFFFF;
 
   // CPU bus 1
@@ -878,6 +890,8 @@ u32 getMemClock(u32 addr) {
 // decoded pixel to VRAM run below full speed (Policenauts: the movie and its streamed audio fell
 // behind, so the sound looped stale buffer data and subtitles were cut short).
 u32 getMemWriteClock(u32 addr) {
+  u32 wram;
+  if (workRamClock(addr, 1, &wram)) return wram;
   const u32 a = addr & 0xDFFFFFFF;
   // VDP1 VRAM/framebuffer and VDP2 VRAM only: register and sound RAM writes keep the old cost, some
   // timing-sensitive games (Fighters Megamix) stop booting when those get faster

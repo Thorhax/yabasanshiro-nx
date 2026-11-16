@@ -1012,6 +1012,14 @@ void SyncCPUtoSCSP() {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// After SSHON the real slave SH-2 boots through the BIOS: ~980 instructions, ~850 of them fetched from the
+// BIOS ROM with the cache still off (~11 cycles each), so it reaches the game's slave entry ~10000 cycles
+// later. Neither the HLE BIOS (which jumps straight to the entry) nor the interpreter (which doesn't charge
+// instruction fetches) took that long, and Fighters Megamix's slave then woke while the master was still
+// posting its first queue entry, read it half-written and called address 0 (hang at boot or after the intro).
+#define SLAVE_BOOT_CYCLES 10500
+#define SLAVE_BOOT_CYCLES_EMULATED 1000
+
 void YabauseStartSlave(void) {
 
   LOG("YabauseStartSlave");
@@ -1044,7 +1052,7 @@ void YabauseStartSlave(void) {
 
       SSH2->cycles = 0;
       SSH2->pre_cycle = 0;
-      SH2Core->AddCycle(SSH2,2000);
+      SH2Core->AddCycle(SSH2, SLAVE_BOOT_CYCLES);
 
       CurrentSH2 = MSH2;
 
@@ -1064,6 +1072,7 @@ void YabauseStartSlave(void) {
      SH2GetRegisters(SSH2, &SSH2->regs);
      SSH2->regs.PC = 0x20000200;
      SH2SetRegisters(SSH2, &SSH2->regs);
+     SH2Core->AddCycle(SSH2, SLAVE_BOOT_CYCLES - SLAVE_BOOT_CYCLES_EMULATED);
 
    }
 

@@ -243,10 +243,13 @@ static const char * kDefaultSettings =
 // name). The player's own per-game settings still win.
 struct BuiltinSetting { const char * game; const char * key; const char * value; const char * why; };
 static const BuiltinSetting kBuiltinSettings[] = {
-  // The dynarec hangs when the intro ends (the master SH-2 queues a slave
-  // command with a null handler); the interpreter is exact and still full speed
-  { "MK-81073", "emulation.sh2_core", "interpreter", "Fighters Megamix hangs after its intro with the dynarec" },
-  { "GS-9126",  "emulation.sh2_core", "interpreter", "Fighters Megamix hangs after its intro with the dynarec" },
+  // Fighters Megamix: matches need the dynarec for full speed (the interpreter
+  // can't keep up on the Switch). With a real BIOS the dynarec can still hang at
+  // boot (slave command queue race), so it runs on the emulator's own BIOS.
+  { "MK-81073", "emulation.sh2_core", "dynarec", "Fighters Megamix needs the dynarec for full-speed matches" },
+  { "MK-81073", "emulation.bios", "hle", "Fighters Megamix can hang at boot with a real BIOS on the dynarec" },
+  { "GS-9126",  "emulation.sh2_core", "dynarec", "Fighters Megamix needs the dynarec for full-speed matches" },
+  { "GS-9126",  "emulation.bios", "hle", "Fighters Megamix can hang at boot with a real BIOS on the dynarec" },
 };
 
 static IniFile builtinGameSettings(const std::vector<std::string> & game_inis)
